@@ -33,23 +33,38 @@ def parse_predictions_from_report(report_file):
         with open(report_file, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        # 解析预测期号
-        period_match = re.search(r'第\s*(\d+)\s*期.*?推荐', content)
+        # 解析预测期号 - 修复正则表达式
+        period_match = re.search(r'第\s*(\d+)\s*期\s*号\s*码\s*推\s*荐', content)
         period = period_match.group(1) if period_match else "未知"
         
-        # 解析推荐号码
+        # 解析所有推荐号码（不限制数量）
         recommendations = []
-        # 匹配格式：注 1: 红球 [01 02 03 04 05] 蓝球 [06 07]
-        rec_pattern = re.compile(r'注\s*\d+:\s*红球\s*\[([\d\s]+)\]\s*蓝球\s*\[([\d\s]+)\]')
+        # 匹配格式：注 1: 红球 [29 30 32 33 34] 蓝球 [02 07] (综合分: 535.85)
+        rec_pattern = re.compile(r'注\s*(\d+):\s*红球\s*\[([\d\s]+)\]\s*蓝球\s*\[([\d\s]+)\]\s*\(综合分:\s*([\d.]+)\)')
         for match in rec_pattern.finditer(content):
-            red_balls = ' '.join(f'{int(n):02d}' for n in match.group(1).split())
-            blue_balls = ' '.join(f'{int(n):02d}' for n in match.group(2).split())
-            recommendations.append(f"红球：{red_balls} 蓝球：{blue_balls}")
+            note_num = match.group(1)
+            red_balls = ' '.join(f'{int(n):02d}' for n in match.group(2).split())
+            blue_balls = ' '.join(f'{int(n):02d}' for n in match.group(3).split())
+            score = match.group(4)
+            recommendations.append(f"注{note_num}: 红球 {red_balls} 蓝球 {blue_balls} (分值:{score})")
         
-        return period, recommendations, content
+        # 解析复式参考 - 修复正则表达式
+        complex_red = []
+        complex_blue = []
+        
+        # 查找复式参考部分 - 新的格式
+        red_match = re.search(r'红球\s*\(Top\s*\d+\):\s*([\d\s]+)', content)
+        blue_match = re.search(r'蓝球\s*\(Top\s*\d+\):\s*([\d\s]+)', content)
+        
+        if red_match:
+            complex_red = [f'{int(n):02d}' for n in red_match.group(1).split()]
+        if blue_match:
+            complex_blue = [f'{int(n):02d}' for n in blue_match.group(1).split()]
+        
+        return period, recommendations, complex_red, complex_blue, content
     except Exception as e:
         print(f"解析预测报告失败: {e}")
-        return None, [], ""
+        return None, [], [], [], ""
 
 def parse_verification_from_calculation():
     """从验证报告中解析验证结果"""
@@ -89,8 +104,6 @@ def parse_verification_from_calculation():
 
 def get_error_summary():
     """从日志文件中提取错误摘要"""
-    error_files = []
-    
     # 检查验证报告中的错误
     if check_file_exists("latest_dlt_calculation.txt"):
         try:
@@ -153,9 +166,9 @@ def main():
         
         # 1. 发送预测报告（如果分析成功）
         if analysis_success and analysis_file:
-            period, recommendations, content = parse_predictions_from_report(analysis_file)
+            period, recommendations, complex_red, complex_blue, content = parse_predictions_from_report(analysis_file)
             if period and recommendations:
-                result = send_analysis_report(content, period, recommendations)
+                result = send_analysis_report(content, period, recommendations, complex_red, complex_blue)
                 total_pushes += 1
                 if result.get("success", False):
                     success_count += 1

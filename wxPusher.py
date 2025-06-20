@@ -12,6 +12,7 @@ import json
 import os
 from datetime import datetime
 from typing import Optional, List, Dict
+from math import comb
 
 # 微信推送配置
 APP_TOKEN = "AT_FInZJJ0mUU8xvQjKRP7v6omvuHN3Fdqw"
@@ -61,41 +62,66 @@ def send_wxpusher_message(content: str, title: str = None, topicIds: List[int] =
         logging.error(f"微信推送异常: {e}")
         return {"success": False, "error": f"未知异常: {str(e)}"}
 
-def send_analysis_report(report_content: str, period: int, recommendations: List[str]) -> Dict:
+def send_analysis_report(report_content: str, period: int, recommendations: List[str], 
+                         complex_red: List[str] = None, complex_blue: List[str] = None) -> Dict:
     """发送大乐透分析报告
     
     Args:
         report_content: 完整的分析报告内容
         period: 预测期号
         recommendations: 推荐号码列表
+        complex_red: 复式红球列表
+        complex_blue: 复式蓝球列表
     
     Returns:
         推送结果字典
     """
     title = f"🎯 大乐透第{period}期预测报告"
     
-    # 提取关键信息制作简洁版推送
+    # 提取关键信息制作详细版推送
     try:
-        # 提取推荐组合
-        rec_summary = "\n".join(recommendations[:5])  # 最多显示5注
-        if len(recommendations) > 5:
-            rec_summary += f"\n... 还有{len(recommendations)-5}注推荐"
+        # 构建单式推荐内容
+        rec_summary = ""
+        if recommendations:
+            # 显示所有推荐号码
+            for i, rec in enumerate(recommendations):
+                rec_summary += f"{rec}\n"
+                # 每5注换行一次，便于阅读
+                if (i + 1) % 5 == 0 and i < len(recommendations) - 1:
+                    rec_summary += "\n"
+        
+        # 构建复式参考内容
+        complex_summary = ""
+        if complex_red and complex_blue:
+            # 计算复式组合数：C(红球数,5) * C(蓝球数,2)
+            red_combinations = comb(len(complex_red), 5) if len(complex_red) >= 5 else 0
+            blue_combinations = comb(len(complex_blue), 2) if len(complex_blue) >= 2 else 0
+            total_combinations = red_combinations * blue_combinations
+            
+            complex_summary = f"""
+📦 复式参考：
+红球({len(complex_red)}个): {' '.join(complex_red)}
+蓝球({len(complex_blue)}个): {' '.join(complex_blue)}
+
+💡 复式共可组成 {total_combinations:,} 注
+💰 投注成本: {total_combinations * 3:,} 元(单注3元)"""
         
         # 构建推送内容
         content = f"""🎯 大乐透第{period}期AI智能预测
 
-📊 本期推荐：
-{rec_summary}
-
+📊 单式推荐 (共{len(recommendations)}注)：
+{rec_summary.strip()}
+{complex_summary}
 📈 分析要点：
 • 基于机器学习LightGBM算法
-• 结合历史频率和遗漏分析
+• 结合历史频率和遗漏分析  
 • 运用关联规则挖掘技术
 • 多因子加权评分优选
+• 反向策略：移除高分注补充候选
 
 ⏰ 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}
 
-💡 仅供参考，理性投注！"""
+💡 仅供参考，理性投注！祝您好运！"""
         
         return send_wxpusher_message(content, title)
         

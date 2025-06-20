@@ -520,13 +520,56 @@ def analyze_frequency_omission(df: pd.DataFrame) -> dict:
                 blue_omission[ball_num] = len(df)
                 blue_max_omission[ball_num] = len(df)
         
+        # 计算平均间隔和近期频率
+        red_avg_interval = {}
+        blue_avg_interval = {}
+        recent_red_freq = {}
+        recent_blue_freq = {}
+        
+        # 红球平均间隔和近期频率
+        for ball_num in RED_BALL_RANGE:
+            if red_freq[ball_num] > 0:
+                red_avg_interval[ball_num] = len(df) / red_freq[ball_num]
+            else:
+                red_avg_interval[ball_num] = len(df)
+            
+            # 近期频率 (最近RECENT_FREQ_WINDOW期)
+            recent_window = df.tail(RECENT_FREQ_WINDOW) if len(df) >= RECENT_FREQ_WINDOW else df
+            recent_appearances = 0
+            for i in range(1, 6):  # 5个红球
+                recent_appearances += len(recent_window[recent_window[f'红球_{i}'] == ball_num])
+            recent_red_freq[ball_num] = recent_appearances
+        
+        # 蓝球平均间隔和近期频率
+        for ball_num in BLUE_BALL_RANGE:
+            if blue_freq[ball_num] > 0:
+                blue_avg_interval[ball_num] = len(df) / blue_freq[ball_num]
+            else:
+                blue_avg_interval[ball_num] = len(df)
+            
+            # 近期频率 (最近RECENT_FREQ_WINDOW期)
+            recent_window = df.tail(RECENT_FREQ_WINDOW) if len(df) >= RECENT_FREQ_WINDOW else df
+            recent_appearances = 0
+            for i in range(1, 3):  # 2个蓝球
+                recent_appearances += len(recent_window[recent_window[f'蓝球_{i}'] == ball_num])
+            recent_blue_freq[ball_num] = recent_appearances
+        
+        # 构建包含所有必要数据的结果字典
         result = {
             'red_freq': red_freq,
             'red_omission': red_omission,
             'red_max_omission': red_max_omission,
             'blue_freq': blue_freq,
             'blue_omission': blue_omission,
-            'blue_max_omission': blue_max_omission
+            'blue_max_omission': blue_max_omission,
+            # 修复缺失的键名
+            'current_omission': red_omission,  # 当前遗漏（红球）
+            'average_interval': red_avg_interval,  # 平均间隔（红球）
+            'max_historical_omission_red': red_max_omission,  # 最大历史遗漏（红球）
+            'recent_N_freq_red': recent_red_freq,  # 近期频率（红球）
+            'blue_current_omission': blue_omission,  # 当前遗漏（蓝球）
+            'blue_average_interval': blue_avg_interval,  # 平均间隔（蓝球）
+            'recent_N_freq_blue': recent_blue_freq,  # 近期频率（蓝球）
         }
         
         logger.info("频率和遗漏分析完成")
@@ -741,9 +784,13 @@ def calculate_scores(freq_data: Dict, probabilities: Dict, weights: Dict) -> Dic
         r_scores[num] = sum([freq_s, omit_s, max_o_s, recent_s, ml_s])
         
     # 蓝球评分
+    blue_omission = freq_data.get('blue_current_omission', {})
+    blue_avg_int = freq_data.get('blue_average_interval', {})
+    blue_recent_freq = freq_data.get('recent_N_freq_blue', {})
+    
     for num in BLUE_BALL_RANGE:
         freq_s = (b_freq.get(num, 0)) * weights['BLUE_FREQ_SCORE_WEIGHT']
-        omit_s = np.exp(-0.01 * (omission.get(f'blue_{num}', 0) - avg_int.get(f'blue_{num}', 0))**2) * weights['BLUE_OMISSION_SCORE_WEIGHT']
+        omit_s = np.exp(-0.01 * (blue_omission.get(num, 0) - blue_avg_int.get(num, 0))**2) * weights['BLUE_OMISSION_SCORE_WEIGHT']
         ml_s = b_pred.get(num, 0.0) * weights['ML_PROB_SCORE_WEIGHT_BLUE']
         b_scores[num] = sum([freq_s, omit_s, ml_s])
 
@@ -755,7 +802,56 @@ def calculate_scores(freq_data: Dict, probabilities: Dict, weights: Dict) -> Dic
         if max_v == min_v: return {k: 50.0 for k in scores_dict}
         return {k: (v - min_v) / (max_v - min_v) * 100 for k, v in scores_dict.items()}
 
-    return {'red_scores': normalize_scores(r_scores), 'blue_scores': normalize_scores(b_scores)}
+    # 应用分布平衡调整（保持分析为基础，但鼓励分布均衡）
+    normalized_r_scores = normalize_scores(r_scores)
+    normalized_b_scores = normalize_scores(b_scores)
+    
+    # 红球区间平衡调整
+    if normalized_r_scores and weights.get('ENABLE_DISTRIBUTION_BALANCE', True):
+        # 计算各区间的平均分数和最高分数
+        zone_stats = {1: [], 2: [], 3: []}
+        for num, score in normalized_r_scores.items():
+            if 1 <= num <= 12:
+                zone = 1
+            elif 13 <= num <= 24:
+                zone = 2
+            else:
+                zone = 3
+            zone_stats[zone].append((num, score))
+        
+        # 对每个区间的过高分数进行适度调整
+        adjustment_factor = 0.88  # 调整强度：保持87%的原分数
+        for zone, num_scores in zone_stats.items():
+            if len(num_scores) > 1:
+                scores = [score for _, score in num_scores]
+                zone_avg = sum(scores) / len(scores)
+                zone_max = max(scores)
+                threshold = zone_avg + (zone_max - zone_avg) * 0.6  # 调整阈值
+                
+                # 只调整明显超出阈值的分数
+                for num, score in num_scores:
+                    if score > threshold:
+                        normalized_r_scores[num] = score * adjustment_factor + zone_avg * (1 - adjustment_factor)
+    
+    # 蓝球大小号平衡调整
+    if normalized_b_scores and weights.get('ENABLE_DISTRIBUTION_BALANCE', True):
+        small_nums = [(num, score) for num, score in normalized_b_scores.items() if num <= 6]
+        large_nums = [(num, score) for num, score in normalized_b_scores.items() if num > 6]
+        
+        adjustment_factor = 0.88
+        
+        for nums_group in [small_nums, large_nums]:
+            if len(nums_group) > 1:
+                scores = [score for _, score in nums_group]
+                group_avg = sum(scores) / len(scores)
+                group_max = max(scores)
+                threshold = group_avg + (group_max - group_avg) * 0.6
+                
+                for num, score in nums_group:
+                    if score > threshold:
+                        normalized_b_scores[num] = score * adjustment_factor + group_avg * (1 - adjustment_factor)
+
+    return {'red_scores': normalized_r_scores, 'blue_scores': normalized_b_scores}
 
 def generate_combinations(scores_data: Dict, pattern_data: Dict, arm_rules: pd.DataFrame, weights_config: Dict) -> Tuple[List[Dict], List[str]]:
     """根据评分和策略生成最终的推荐组合。"""
@@ -763,38 +859,67 @@ def generate_combinations(scores_data: Dict, pattern_data: Dict, arm_rules: pd.D
     r_scores, b_scores = scores_data.get('red_scores', {}), scores_data.get('blue_scores', {})
     if not r_scores or not b_scores: return [], ["无法生成推荐 (分数数据缺失)。"]
 
-    # 1. 构建候选池
+    # 1. 构建候选池 - 确保号码分布的多样性
     top_n_red = int(weights_config['TOP_N_RED_FOR_CANDIDATE'])
     top_n_blue = int(weights_config['TOP_N_BLUE_FOR_CANDIDATE'])
-    r_cand_pool = [n for n, _ in sorted(r_scores.items(), key=lambda i: i[1], reverse=True)[:top_n_red]]
-    b_cand_pool = [n for n, _ in sorted(b_scores.items(), key=lambda i: i[1], reverse=True)[:top_n_blue]]
-    if len(r_cand_pool) < 5 or not b_cand_pool: return [], ["候选池号码不足。"]  # 大乐透需要5个红球
+    
+    # 按分数排序，但在选择候选池时加入分区平衡
+    all_red_sorted = sorted(r_scores.items(), key=lambda i: i[1], reverse=True)
+    all_blue_sorted = sorted(b_scores.items(), key=lambda i: i[1], reverse=True)
+    
+    # 严格按分数选择候选池，确保所有号码都基于分析结果
+    r_cand_pool = [num for num, score in all_red_sorted[:top_n_red]]
+    b_cand_pool = [num for num, score in all_blue_sorted[:top_n_blue]]
+    
+    if len(r_cand_pool) < 5 or not b_cand_pool: 
+        return [], ["候选池号码不足。"]
 
-    # 2. 生成大量初始组合
-    large_pool_size = max(num_to_gen * 50, 500)
-    gen_pool, unique_combos = [], set()
-    r_weights = np.array([r_scores.get(n, 0) + 1 for n in r_cand_pool])
+    # 2. 基于候选池的随机组合生成（候选池已基于完整分析）
+    gen_pool = []
+    unique_combos = set()
+    
+    # 创建权重用于加权随机选择
+    r_weights = np.array([r_scores.get(num, 0) for num in r_cand_pool])
     r_probs = r_weights / r_weights.sum() if r_weights.sum() > 0 else None
     
-    for _ in range(large_pool_size * 20): # 尝试多次以生成足量不重复组合
-        if len(gen_pool) >= large_pool_size: break
-        # 大乐透：5个红球 + 2个蓝球
-        reds = sorted(np.random.choice(r_cand_pool, size=5, replace=False, p=r_probs).tolist()) if r_probs is not None else sorted(random.sample(r_cand_pool, 5))
-        blues = sorted(random.sample(b_cand_pool, min(2, len(b_cand_pool))))  # 大乐透2个蓝球
-        if (combo_tuple := (tuple(reds), tuple(blues))) not in unique_combos:
-            gen_pool.append({'red': reds, 'blue': blues}); unique_combos.add(combo_tuple)
+    # 生成目标数量的组合
+    target_combinations = max(num_to_gen * 50, 500)
+    max_attempts = target_combinations * 10
+    
+    for attempt in range(max_attempts):
+        if len(gen_pool) >= target_combinations:
+            break
+            
+        try:
+            # 从分析得出的候选池中随机选择（基于权重）
+            if r_probs is not None:
+                reds = sorted(np.random.choice(r_cand_pool, size=5, replace=False, p=r_probs).tolist())
+            else:
+                reds = sorted(random.sample(r_cand_pool, 5))
+            
+            # 蓝球从候选池中随机选择
+            blues = sorted(random.sample(b_cand_pool, min(2, len(b_cand_pool))))
+            
+            # 检查是否重复
+            combo_tuple = (tuple(reds), tuple(blues))
+            if combo_tuple not in unique_combos:
+                gen_pool.append({'red': reds, 'blue': blues})
+                unique_combos.add(combo_tuple)
+                
+        except (ValueError, IndexError):
+            # 如果候选池不足，生成其他组合
+            continue
 
-    # 3. 评分和筛选
+    # 3. 评分和筛选（保持原有逻辑）
     scored_combos = []
     for c in gen_pool:
-        # 基础分 = 号码分总和
         base_score = sum(r_scores.get(r, 0) for r in c['red']) + sum(b_scores.get(b, 0) for b in c['blue'])
         scored_combos.append({'combination': c, 'score': base_score, 'red_tuple': tuple(c['red'])})
 
     # 4. 多样性筛选和最终选择
     sorted_combos = sorted(scored_combos, key=lambda x: x['score'], reverse=True)
     final_recs = []
-    max_common = 5 - int(weights_config.get('DIVERSITY_MIN_DIFFERENT_REDS', 2))  # 大乐透调整
+    max_common = 5 - int(weights_config.get('DIVERSITY_MIN_DIFFERENT_REDS', 2))
     
     if sorted_combos:
         final_recs.append(sorted_combos.pop(0))
@@ -1109,10 +1234,51 @@ if __name__ == "__main__":
     
     logger.info("\n--- 复式参考 ---")
     if final_scores and final_scores.get('red_scores'):
-        top_8_red = sorted([n for n, _ in sorted(final_scores['red_scores'].items(), key=lambda x: x[1], reverse=True)[:8]])
-        top_6_blue = sorted([n for n, _ in sorted(final_scores['blue_scores'].items(), key=lambda x: x[1], reverse=True)[:6]])
-        logger.info(f"  红球 (Top 8): {' '.join(f'{n:02d}' for n in top_8_red)}")
-        logger.info(f"  蓝球 (Top 6): {' '.join(f'{n:02d}' for n in top_6_blue)}")
+        # 采用分区平衡的复式选择策略，避免大号偏向
+        r_scores = final_scores['red_scores']
+        b_scores = final_scores['blue_scores']
+        
+        # 红球分区选择：确保各区间平衡
+        zone_reds = {1: [], 2: [], 3: []}
+        for num, score in sorted(r_scores.items(), key=lambda x: x[1], reverse=True):
+            if 1 <= num <= 12:
+                zone_reds[1].append(num)
+            elif 13 <= num <= 24:
+                zone_reds[2].append(num)
+            else:
+                zone_reds[3].append(num)
+        
+        # 从每个区间选择代表性号码
+        complex_red = []
+        target_per_zone = 8 // 3  # 每区目标数量
+        remaining = 8
+        
+        for zone in [1, 2, 3]:
+            zone_count = min(len(zone_reds[zone]), max(2, min(target_per_zone, remaining-2)))
+            complex_red.extend(zone_reds[zone][:zone_count])
+            remaining -= zone_count
+        
+        # 如果还需要更多号码，按分数补充
+        all_red_by_score = [n for n, _ in sorted(r_scores.items(), key=lambda x: x[1], reverse=True)]
+        for num in all_red_by_score:
+            if num not in complex_red and len(complex_red) < 8:
+                complex_red.append(num)
+        
+        complex_red = sorted(complex_red[:8])
+        
+        # 蓝球大小号平衡选择
+        small_blues = [n for n, s in sorted(b_scores.items(), key=lambda x: x[1], reverse=True) if n <= 6]
+        large_blues = [n for n, s in sorted(b_scores.items(), key=lambda x: x[1], reverse=True) if n > 6]
+        
+        complex_blue = []
+        complex_blue.extend(small_blues[:3])  # 最多选3个小号
+        complex_blue.extend(large_blues[:3])  # 最多选3个大号
+        complex_blue = sorted(complex_blue[:6])
+        
+        logger.info(f"  红球 (平衡选择): {' '.join(f'{n:02d}' for n in complex_red)}")
+        logger.info(f"  蓝球 (平衡选择): {' '.join(f'{n:02d}' for n in complex_blue)}")
+        logger.info(f"  红球分布 - 小区(1-12):{len([n for n in complex_red if 1<=n<=12])}个, 中区(13-24):{len([n for n in complex_red if 13<=n<=24])}个, 大区(25-35):{len([n for n in complex_red if 25<=n<=35])}个")
+        logger.info(f"  蓝球分布 - 小号(1-6):{len([n for n in complex_blue if n<=6])}个, 大号(7-12):{len([n for n in complex_blue if n>6])}个")
     
     logger.info("\n" + "="*60 + f"\n--- 报告结束 (详情请查阅: {os.path.basename(log_filename)}) ---\n")
     
