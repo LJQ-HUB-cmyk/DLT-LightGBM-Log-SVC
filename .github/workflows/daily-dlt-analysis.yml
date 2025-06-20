@@ -1,0 +1,142 @@
+name: Daletou Data and Analysis
+
+on:
+  schedule:
+    # UTC时间周日、周二、周五的 23:00，对应北京时间周一、周三、周六的 7:00
+    - cron: '0 23 * * 0,2,5'
+  workflow_dispatch:
+
+jobs:
+  daily_process:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # 允许写入仓库内容
+      actions: read    # 允许读取Actions信息
+    env:
+      TZ: Asia/Shanghai # Set timezone for consistent date/time operations
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # Fetch all history for git operations
+
+    - name: Set up Python 3.9
+      uses: actions/setup-python@v5
+      with:
+        python-version: 3.9
+
+    - name: Cache pip dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run data acquisition script
+      run: python dlt_data_processor.py
+
+    - name: Run bonus calculation script
+      run: python dlt_bonus_calculation.py
+      
+    - name: Run analysis script
+      run: python dlt_analyzer.py
+
+    - name: Send daily summary notification
+      run: python send_daily_summary.py
+      continue-on-error: true  # 推送失败不影响工作流状态
+
+    - name: Create fixed filename copy of latest analysis report
+      run: |
+        set -e
+        latest_report_file=$(find . -maxdepth 1 -name 'dlt_analysis_output_*.txt' -print0 | xargs -0 ls -1 | sort -r | head -n 1)
+        if [ -n "$latest_report_file" ] && [ -f "$latest_report_file" ]; then
+          cp "$latest_report_file" "latest_dlt_analysis.txt"
+          echo "Created fixed filename copy: latest_dlt_analysis.txt from $latest_report_file"
+        else
+          echo "No dlt_analysis_output_*.txt files found, or latest_report_file variable is empty. Skipping copy."
+        fi
+
+    - name: Clean old reports - keep only latest 3
+      run: |
+        set -e
+        echo "--- Cleaning old analysis reports ---"
+        mapfile -t reports < <(find . -maxdepth 1 -name 'dlt_analysis_output_*.txt' -print0 | xargs -0 ls -1 | sort)
+        count=${#reports[@]}
+        keep=3
+        echo "Found $count reports. Configured to keep $keep latest."
+        if [ "$count" -gt "$keep" ]; then
+          num_to_delete=$((count - keep))
+          echo "Deleting $num_to_delete oldest reports:"
+          for i in $(seq 0 $((num_to_delete - 1))); do
+            report_to_delete="${reports[$i]}"
+            if [ -f "$report_to_delete" ]; then
+              echo "Removing: $report_to_delete"
+              rm "$report_to_delete"
+            else
+              echo "Skipping (not found): $report_to_delete"
+            fi
+          done
+        else
+          echo "No cleanup needed. $count report(s) found (≤ $keep)."
+        fi
+        echo "Listing remaining analysis reports:"
+        find . -maxdepth 1 -name 'dlt_analysis_output_*.txt' | sort
+        echo "--- Finished cleaning reports ---"
+
+    - name: Configure Git
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+
+    - name: Commit updated files
+      run: |
+        set -e
+        echo "--- Staging and Committing Files ---"
+        git add -u
+        files_to_commit=(
+          "daletou.csv"
+          "latest_dlt_analysis.txt"
+          "latest_dlt_calculation.txt"
+          "weights_config.json"
+          "send_daily_summary.py"
+        )
+        for file_path in "${files_to_commit[@]}"; do
+          if [ -f "$file_path" ]; then
+            git add "$file_path"
+            echo "Staged: $file_path"
+          else
+            echo "Skipping (not found): $file_path"
+          fi
+        done
+        find . -maxdepth 1 -name 'dlt_analysis_output_*.txt' -print0 | xargs -0 -r git add
+        echo "Staged any new dlt_analysis_output_*.txt files."
+        echo "Current git status:"
+        git status --porcelain
+        if git diff --staged --quiet; then
+          echo "No changes to commit."
+        else
+          git commit -m "Auto update: DLT Data and Analysis results $(date +'%Y-%m-%d %H:%M:%S %Z')"
+          echo "Changes committed."
+        fi
+        echo "--- Finished Staging and Committing ---"
+
+    - name: Pull remote changes to sync before push
+      run: |
+        echo "Current branch: $(git rev-parse --abbrev-ref HEAD)"
+        echo "Target branch from GITHUB_REF_NAME: ${{ github.ref_name }}"
+        git config pull.rebase false
+        git pull origin ${{ github.ref_name }} --no-edit
+        echo "Successfully pulled and merged remote changes (if any)."
+
+    - name: Push changes
+      uses: ad-m/github-push-action@v0.8.0
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        branch: ${{ github.ref_name }} 
