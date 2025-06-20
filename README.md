@@ -169,7 +169,7 @@ git status
 git add .
 
 # 3. 提交更改
-git commit -m "📊 更新数据和分析结果 $(date '+%Y-%m-%d')"
+git commit -m "📊 优化推荐号码生存逻辑"
 
 # 4. 推送到远程仓库
 git push origin main

@@ -82,13 +82,13 @@ RED_ZONES = {'Zone1': (1, 12), 'Zone2': (13, 24), 'Zone3': (25, 35)}
 # --- 分析与执行参数配置 ---
 # --------------------------
 # 机器学习模型使用的滞后特征阶数 (e.g., 使用前1、3、5、10期的数据作为特征)
-ML_LAG_FEATURES = [1, 3, 5, 10]
+ML_LAG_FEATURES = [1, 3, 5, 8,13]
 # 用于生成乘积交互特征的特征对 (e.g., 红球和值 * 红球奇数个数)
 ML_INTERACTION_PAIRS = [('red_sum', 'red_odd_count')]
 # 用于生成自身平方交互特征的特征 (e.g., 红球跨度的平方)
 ML_INTERACTION_SELF = ['red_span']
 # 计算号码"近期"出现频率时所参考的期数窗口大小
-RECENT_FREQ_WINDOW = 20
+RECENT_FREQ_WINDOW = 50
 # 在分析模式下，进行策略回测时所评估的总期数
 BACKTEST_PERIODS_COUNT = 100
 # 在优化模式下，每次试验用于快速评估性能的回测期数 (数值越小优化越快)
@@ -171,14 +171,14 @@ DEFAULT_WEIGHTS = {
 LGBM_PARAMS = {
     'objective': 'binary',              # 目标函数：二分类问题（预测一个球号是否出现）
     'boosting_type': 'gbdt',            # 提升类型：梯度提升决策树
-    'learning_rate': 0.04,              # 学习率：控制每次迭代的步长
-    'n_estimators': 100,                # 树的数量：总迭代次数
-    'num_leaves': 15,                   # 每棵树的最大叶子节点数：控制模型复杂度
-    'min_child_samples': 15,            # 一个叶子节点上所需的最小样本数：防止过拟合
+    'learning_rate': 0.06,              # 学习率：控制每次迭代的步长 (优化后)
+    'n_estimators': 200,                # 树的数量：总迭代次数 (优化后)
+    'num_leaves': 30,                   # 每棵树的最大叶子节点数：控制模型复杂度 (优化后)
+    'min_child_samples': 12,            # 一个叶子节点上所需的最小样本数：防止过拟合 (优化后)
     'lambda_l1': 0.15,                  # L1 正则化
     'lambda_l2': 0.15,                  # L2 正则化
-    'feature_fraction': 0.7,            # 特征采样比例：每次迭代随机选择70%的特征
-    'bagging_fraction': 0.8,            # 数据采样比例：每次迭代随机选择80%的数据
+    'feature_fraction': 0.85,           # 特征采样比例：每次迭代随机选择85%的特征 (优化后)
+    'bagging_fraction': 0.9,            # 数据采样比例：每次迭代随机选择90%的数据 (优化后)
     'bagging_freq': 5,                  # 数据采样的频率：每5次迭代进行一次
     'seed': 42,                         # 随机种子：确保结果可复现
     'n_jobs': 1,                        # 并行线程数：设为1以在多进程环境中避免冲突
@@ -998,8 +998,12 @@ def run_backtest(full_df: pd.DataFrame, ml_lags: List[int], weights_config: Dict
         
         # 使用SuppressOutput避免在回测循环中打印大量日志
         with SuppressOutput(suppress_stdout=True, capture_stderr=True):
+            # 临时设置更高的日志级别以减少输出
+            temp_level = logger.level
+            logger.setLevel(logging.WARNING)
             hist_data = full_df.iloc[:current_idx]
             predicted_combos, _, _, _, _ = run_analysis_and_recommendation(hist_data, ml_lags, weights_config, arm_rules)
+            logger.setLevel(temp_level)
             
         actual_outcome = full_df.loc[current_idx]
         actual_red_set = set(actual_outcome[red_cols])
@@ -1287,11 +1291,62 @@ if __name__ == "__main__":
         from wxPusher import send_analysis_report
         logger.info("正在发送微信推送...")
         
+        # 提取复式推荐号码
+        complex_red_list = None
+        complex_blue_list = None
+        if final_scores and final_scores.get('red_scores'):
+            # 重新提取复式号码（与上面的逻辑保持一致）
+            r_scores = final_scores['red_scores']
+            b_scores = final_scores['blue_scores']
+            
+            # 红球分区选择：确保各区间平衡
+            zone_reds = {1: [], 2: [], 3: []}
+            for num, score in sorted(r_scores.items(), key=lambda x: x[1], reverse=True):
+                if 1 <= num <= 12:
+                    zone_reds[1].append(num)
+                elif 13 <= num <= 24:
+                    zone_reds[2].append(num)
+                else:
+                    zone_reds[3].append(num)
+            
+            # 从每个区间选择代表性号码
+            complex_red = []
+            target_per_zone = 8 // 3  # 每区目标数量
+            remaining = 8
+            
+            for zone in [1, 2, 3]:
+                zone_count = min(len(zone_reds[zone]), max(2, min(target_per_zone, remaining-2)))
+                complex_red.extend(zone_reds[zone][:zone_count])
+                remaining -= zone_count
+            
+            # 如果还需要更多号码，按分数补充
+            all_red_by_score = [n for n, _ in sorted(r_scores.items(), key=lambda x: x[1], reverse=True)]
+            for num in all_red_by_score:
+                if num not in complex_red and len(complex_red) < 8:
+                    complex_red.append(num)
+            
+            complex_red = sorted(complex_red[:8])
+            
+            # 蓝球大小号平衡选择
+            small_blues = [n for n, s in sorted(b_scores.items(), key=lambda x: x[1], reverse=True) if n <= 6]
+            large_blues = [n for n, s in sorted(b_scores.items(), key=lambda x: x[1], reverse=True) if n > 6]
+            
+            complex_blue = []
+            complex_blue.extend(small_blues[:3])  # 最多选3个小号
+            complex_blue.extend(large_blues[:3])  # 最多选3个大号
+            complex_blue = sorted(complex_blue[:6])
+            
+            # 转换为格式化字符串列表
+            complex_red_list = [f'{n:02d}' for n in complex_red]
+            complex_blue_list = [f'{n:02d}' for n in complex_blue]
+        
         # 发送分析报告推送
         push_result = send_analysis_report(
             report_content=log_filename,  # 报告文件名
             period=last_period + 1,      # 预测期号
-            recommendations=final_rec_strings  # 推荐号码
+            recommendations=final_rec_strings,  # 推荐号码
+            complex_red=complex_red_list,       # 复式红球
+            complex_blue=complex_blue_list      # 复式蓝球
         )
         
         if push_result.get("success", False):
