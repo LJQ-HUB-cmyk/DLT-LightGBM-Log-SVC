@@ -484,23 +484,28 @@ def main_process():
         log_message(f"验证完成: 总投注{len(all_tickets)}注, 总奖金{total_prize:,}元")
         log_message(f"中奖分布: {prize_summary}")
         
-        # 发送微信推送
+        # 发送简化验证结果推送
         try:
-            from wxPusher import send_verification_report
-            log_message("正在发送验证报告微信推送...")
+            from wxPusher import send_wxpusher_message
+            log_message("正在发送验证结果微信推送...")
             
-            # 构建验证数据
-            verification_data = {
-                'period': latest_period,
-                'winning_red': prize_red,
-                'winning_blue': prize_blue,
-                'total_bets': len(all_tickets),
-                'total_prize': total_prize,
-                'prize_summary': prize_summary
-            }
+            # 构建简洁的验证内容
+            roi = ((total_prize - len(all_tickets) * 3) / (len(all_tickets) * 3) * 100) if len(all_tickets) > 0 else 0
             
-            # 发送验证报告推送
-            push_result = send_verification_report(verification_data)
+            simple_content = f"✅ 第{latest_period}期开奖验证\n\n"
+            simple_content += f"🎱 开奖号码：\n"
+            simple_content += f"红球: {' '.join(f'{n:02d}' for n in prize_red)}\n"
+            simple_content += f"蓝球: {' '.join(f'{n:02d}' for n in prize_blue)}\n\n"
+            simple_content += f"📊 验证结果：\n"
+            simple_content += f"投注: {len(all_tickets)}注 | 成本: {len(all_tickets) * 3}元\n"
+            simple_content += f"中奖: {prize_summary}\n"
+            simple_content += f"奖金: {total_prize:,}元 | 回报: {roi:.1f}%"
+            
+            # 发送简化推送
+            push_result = send_wxpusher_message(
+                content=simple_content,  
+                title=f"✅ 第{latest_period}期验证"
+            )
             
             if push_result.get("success", False):
                 log_message("✅ 验证报告微信推送发送成功")
@@ -518,12 +523,12 @@ def main_process():
         manage_report(new_error=error_msg)
         log_message(f"详细错误:\n{traceback.format_exc()}", "ERROR")
         
-        # 发送错误通知
-        try:
-            from wxPusher import send_error_notification
-            send_error_notification(error_msg, "大乐透验证系统")
-        except:
-            pass  # 忽略推送错误，避免二次异常
+        # 暂时禁用错误推送，避免信息过多
+        # try:
+        #     from wxPusher import send_error_notification
+        #     send_error_notification(error_msg, "大乐透验证系统")
+        # except:
+        #     pass  # 忽略推送错误，避免二次异常
 
 if __name__ == "__main__":
     main_process() 

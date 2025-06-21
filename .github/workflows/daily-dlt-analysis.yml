@@ -48,9 +48,10 @@ jobs:
     - name: Run analysis script
       run: python dlt_analyzer.py
 
-    - name: Send daily summary notification
-      run: python send_daily_summary.py
-      continue-on-error: true  # 推送失败不影响工作流状态
+    # 暂时禁用日常摘要推送，避免信息过多
+    # - name: Send daily summary notification
+    #   run: python send_daily_summary.py
+    #   continue-on-error: true  # 推送失败不影响工作流状态
 
     - name: Create fixed filename copy of latest analysis report
       run: |

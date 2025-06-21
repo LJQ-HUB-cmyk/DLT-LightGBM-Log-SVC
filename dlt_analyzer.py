@@ -1286,67 +1286,43 @@ if __name__ == "__main__":
     
     logger.info("\n" + "="*60 + f"\n--- 报告结束 (详情请查阅: {os.path.basename(log_filename)}) ---\n")
     
-    # 发送微信推送
+    # 发送简化微信推送
     try:
-        from wxPusher import send_analysis_report
-        logger.info("正在发送微信推送...")
+        from wxPusher import send_wxpusher_message
+        logger.info("正在发送简化微信推送...")
         
-        # 提取复式推荐号码
-        complex_red_list = None
-        complex_blue_list = None
+        # 构建简洁的推荐内容
+        simple_content = f"🎯 大乐透第{last_period + 1}期推荐\n\n"
+        
+        # 单式推荐（只显示前5注）
+        simple_content += "📊 单式推荐：\n"
+        for i, rec_line in enumerate(final_rec_strings[1:6]):  # 跳过标题行，取前5注
+            if rec_line.strip():
+                simple_content += f"{rec_line}\n"
+        
+        # 复式推荐
         if final_scores and final_scores.get('red_scores'):
-            # 重新提取复式号码（与上面的逻辑保持一致）
             r_scores = final_scores['red_scores']
             b_scores = final_scores['blue_scores']
             
-            # 红球分区选择：确保各区间平衡
-            zone_reds = {1: [], 2: [], 3: []}
-            for num, score in sorted(r_scores.items(), key=lambda x: x[1], reverse=True):
-                if 1 <= num <= 12:
-                    zone_reds[1].append(num)
-                elif 13 <= num <= 24:
-                    zone_reds[2].append(num)
-                else:
-                    zone_reds[3].append(num)
+            # 红球Top8
+            top_reds = sorted(r_scores.items(), key=lambda x: x[1], reverse=True)[:8]
+            red_nums = [f'{n:02d}' for n, _ in top_reds]
             
-            # 从每个区间选择代表性号码
-            complex_red = []
-            target_per_zone = 8 // 3  # 每区目标数量
-            remaining = 8
+            # 蓝球Top4  
+            top_blues = sorted(b_scores.items(), key=lambda x: x[1], reverse=True)[:4]
+            blue_nums = [f'{n:02d}' for n, _ in top_blues]
             
-            for zone in [1, 2, 3]:
-                zone_count = min(len(zone_reds[zone]), max(2, min(target_per_zone, remaining-2)))
-                complex_red.extend(zone_reds[zone][:zone_count])
-                remaining -= zone_count
-            
-            # 如果还需要更多号码，按分数补充
-            all_red_by_score = [n for n, _ in sorted(r_scores.items(), key=lambda x: x[1], reverse=True)]
-            for num in all_red_by_score:
-                if num not in complex_red and len(complex_red) < 8:
-                    complex_red.append(num)
-            
-            complex_red = sorted(complex_red[:8])
-            
-            # 蓝球大小号平衡选择
-            small_blues = [n for n, s in sorted(b_scores.items(), key=lambda x: x[1], reverse=True) if n <= 6]
-            large_blues = [n for n, s in sorted(b_scores.items(), key=lambda x: x[1], reverse=True) if n > 6]
-            
-            complex_blue = []
-            complex_blue.extend(small_blues[:3])  # 最多选3个小号
-            complex_blue.extend(large_blues[:3])  # 最多选3个大号
-            complex_blue = sorted(complex_blue[:6])
-            
-            # 转换为格式化字符串列表
-            complex_red_list = [f'{n:02d}' for n in complex_red]
-            complex_blue_list = [f'{n:02d}' for n in complex_blue]
+            simple_content += f"\n📦 复式参考：\n"
+            simple_content += f"红球: {' '.join(red_nums)}\n"
+            simple_content += f"蓝球: {' '.join(blue_nums)}\n"
         
-        # 发送分析报告推送
-        push_result = send_analysis_report(
-            report_content=log_filename,  # 报告文件名
-            period=last_period + 1,      # 预测期号
-            recommendations=final_rec_strings,  # 推荐号码
-            complex_red=complex_red_list,       # 复式红球
-            complex_blue=complex_blue_list      # 复式蓝球
+        simple_content += f"\n⏰ {datetime.datetime.now().strftime('%m-%d %H:%M')} 生成"
+        
+        # 发送简化推送
+        push_result = send_wxpusher_message(
+            content=simple_content,
+            title=f"🎯 第{last_period + 1}期推荐"
         )
         
         if push_result.get("success", False):
