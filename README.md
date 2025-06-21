@@ -169,11 +169,17 @@ git status
 git add .
 
 # 3. 提交更改
-git commit -m "📊 优化号码组合"
+git commit -m "📊 优化奖金规则"
 
 # 4. 推送到远程仓库
 git push origin main
+
+
+如果需要强制推送（谨慎使用）：
+git push -f origin main
 ```
+
+
 
 ### 🔧 常见Git命令
 
