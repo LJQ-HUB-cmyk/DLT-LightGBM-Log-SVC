@@ -64,7 +64,7 @@ ENABLE_OPTUNA_OPTIMIZATION = False
 # --- 策略开关配置 ---
 # --------------------------
 # 是否启用最终推荐组合层面的"反向思维"策略 (移除得分最高的几注)
-ENABLE_FINAL_COMBO_REVERSE = True
+ENABLE_FINAL_COMBO_REVERSE = False
 # 在启用反向思维并移除组合后，是否从候选池中补充新的组合以达到目标数量
 ENABLE_REVERSE_REFILL = True
 
@@ -105,59 +105,59 @@ MIN_POSITIVE_SAMPLES_FOR_ML = 25
 DEFAULT_WEIGHTS = {
     # --- 反向思维 ---
     # 若启用反向思维，从最终推荐列表中移除得分最高的组合的比例
-    'FINAL_COMBO_REVERSE_REMOVE_TOP_PERCENT': 0.3,
+    'FINAL_COMBO_REVERSE_REMOVE_TOP_PERCENT': 0.15037122540392944,
 
     # --- 组合生成 ---
     # 最终向用户推荐的组合（注数）数量
-    'NUM_COMBINATIONS_TO_GENERATE': 10,
+    'NUM_COMBINATIONS_TO_GENERATE': 12,
     # 构建红球候选池时，从所有红球中选取分数最高的N个
-    'TOP_N_RED_FOR_CANDIDATE': 20,  # 大乐透红球数量调整
+    'TOP_N_RED_FOR_CANDIDATE': 27,  # 大乐透红球数量调整
     # 构建蓝球候选池时，从所有蓝球中选取分数最高的N个
-    'TOP_N_BLUE_FOR_CANDIDATE': 8,  # 大乐透蓝球数量调整
+    'TOP_N_BLUE_FOR_CANDIDATE': 27,  # 大乐透蓝球数量调整
 
     # --- 红球评分权重 ---
     # 红球历史总频率得分的权重
-    'FREQ_SCORE_WEIGHT': 28.19,
+    'FREQ_SCORE_WEIGHT': 39.6008959202287,
     # 红球当前遗漏值（与平均遗漏的偏差）得分的权重
-    'OMISSION_SCORE_WEIGHT': 19.92,
+    'OMISSION_SCORE_WEIGHT': 24.23527973162876,
     # 红球当前遗漏与其历史最大遗漏比率的得分权重
-    'MAX_OMISSION_RATIO_SCORE_WEIGHT_RED': 16.12,
+    'MAX_OMISSION_RATIO_SCORE_WEIGHT_RED': 10.740780311553705,
     # 红球近期出现频率的得分权重
-    'RECENT_FREQ_SCORE_WEIGHT_RED': 15.71,
+    'RECENT_FREQ_SCORE_WEIGHT_RED': 17.905678598769963,
     # 红球的机器学习模型预测出现概率的得分权重
-    'ML_PROB_SCORE_WEIGHT_RED': 22.43,
+    'ML_PROB_SCORE_WEIGHT_RED': 23.147967171896067,
 
     # --- 蓝球评分权重 ---
     # 蓝球历史总频率得分的权重
-    'BLUE_FREQ_SCORE_WEIGHT': 27.11,
+    'BLUE_FREQ_SCORE_WEIGHT': 32.11137443178358,
     # 蓝球当前遗漏值（与平均遗漏的偏差）得分的权重
-    'BLUE_OMISSION_SCORE_WEIGHT': 23.26,
+    'BLUE_OMISSION_SCORE_WEIGHT': 26.175435156323047,
     # 蓝球的机器学习模型预测出现概率的得分权重
-    'ML_PROB_SCORE_WEIGHT_BLUE': 43.48,
+    'ML_PROB_SCORE_WEIGHT_BLUE': 64.74980174190739,
 
     # --- 组合属性匹配奖励 ---
     # 推荐组合的红球奇数个数若与历史最常见模式匹配，获得的奖励分值
-    'COMBINATION_ODD_COUNT_MATCH_BONUS': 13.10,
+    'COMBINATION_ODD_COUNT_MATCH_BONUS': 9.326237701278592,
     # 推荐组合的蓝球奇偶性若与历史最常见模式匹配，获得的奖励分值
-    'COMBINATION_BLUE_ODD_MATCH_BONUS': 0.40,
+    'COMBINATION_BLUE_ODD_MATCH_BONUS': 0.5545967879384652,
     # 推荐组合的红球区间分布若与历史最常见模式匹配，获得的奖励分值
-    'COMBINATION_ZONE_MATCH_BONUS': 13.12,
+    'COMBINATION_ZONE_MATCH_BONUS': 24.28802539644088,
     # 推荐组合的蓝球大小若与历史最常见模式匹配，获得的奖励分值
-    'COMBINATION_BLUE_SIZE_MATCH_BONUS': 0.84,
+    'COMBINATION_BLUE_SIZE_MATCH_BONUS': 1.5475009230332293,
 
     # --- 关联规则挖掘(ARM)参数与奖励 ---
     # ARM算法的最小支持度阈值
-    'ARM_MIN_SUPPORT': 0.01,
+    'ARM_MIN_SUPPORT': 0.008761184741320602,
     # ARM算法的最小置信度阈值
-    'ARM_MIN_CONFIDENCE': 0.53,
+    'ARM_MIN_CONFIDENCE': 0.7073238609360079,
     # ARM算法的最小提升度阈值
-    'ARM_MIN_LIFT': 1.53,
+    'ARM_MIN_LIFT': 1.1024830828816812,
     # 推荐组合若命中了某条挖掘出的关联规则，其获得的基础奖励分值
-    'ARM_COMBINATION_BONUS_WEIGHT': 18.86,
+    'ARM_COMBINATION_BONUS_WEIGHT': 26.491181011671237,
     # 在计算ARM奖励时，规则的提升度(lift)对此奖励的贡献乘数因子
-    'ARM_BONUS_LIFT_FACTOR': 0.48,
+    'ARM_BONUS_LIFT_FACTOR': 0.5310160537096821,
     # 在计算ARM奖励时，规则的置信度(confidence)对此奖励的贡献乘数因子
-    'ARM_BONUS_CONF_FACTOR': 0.25,
+    'ARM_BONUS_CONF_FACTOR': 0.37464961854271794,
 
     # --- 组合多样性控制 ---
     # 最终推荐的任意两注组合之间，其红球号码至少要有几个是不同的
@@ -171,8 +171,8 @@ DEFAULT_WEIGHTS = {
 LGBM_PARAMS = {
     'objective': 'binary',              # 目标函数：二分类问题（预测一个球号是否出现）
     'boosting_type': 'gbdt',            # 提升类型：梯度提升决策树
-    'learning_rate': 0.06,              # 学习率：控制每次迭代的步长 (优化后)
-    'n_estimators': 200,                # 树的数量：总迭代次数 (优化后)
+    'learning_rate': 0.01,              # 学习率：控制每次迭代的步长 (优化后)
+    'n_estimators': 100,                # 树的数量：总迭代次数 (优化后)
     'num_leaves': 30,                   # 每棵树的最大叶子节点数：控制模型复杂度 (优化后)
     'min_child_samples': 12,            # 一个叶子节点上所需的最小样本数：防止过拟合 (优化后)
     'lambda_l1': 0.15,                  # L1 正则化
