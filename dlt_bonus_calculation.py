@@ -422,16 +422,53 @@ def main_process():
         if not period_map or len(periods_list) < 2:
             raise Exception("CSV数据不足或解析失败")
         
-        # 确定评估期和报告期
+        # 智能确定验证逻辑
         latest_period = periods_list[-1]
-        report_period = periods_list[-2]
         
-        log_message(f"最新期号: {latest_period}, 报告期号: {report_period}")
+        log_message(f"最新期号: {latest_period}")
         
-        # 查找匹配的分析报告
-        report_file = find_matching_report(report_period)
+        # 智能查找分析报告：
+        # 1. 首先尝试找基于 latest_period-1 的报告来验证 latest_period
+        # 2. 如果找不到，则查找所有可用的报告，选择最合适的进行验证
+        
+        report_file = None
+        verification_period = None
+        data_end_period = None
+        
+        # 尝试查找基于倒数第二期数据的报告
+        if len(periods_list) >= 2:
+            report_period = periods_list[-2]
+            report_file = find_matching_report(report_period)
+            if report_file:
+                verification_period = latest_period
+                data_end_period = report_period
+                log_message(f"找到基于期号 {report_period} 的分析报告，将验证第 {verification_period} 期开奖结果")
+        
+        # 如果没找到，尝试查找基于最新期数据的报告
         if not report_file:
-            raise Exception(f"未找到期号 {report_period} 的分析报告")
+            report_file = find_matching_report(latest_period)
+            if report_file:
+                # 这种情况下，报告预测的是下一期（latest_period + 1），但下一期还没开奖
+                # 我们可以选择跳过验证或者用历史数据验证报告的回测性能
+                log_message(f"找到基于期号 {latest_period} 的分析报告，但其预测期 {int(latest_period) + 1} 尚未开奖")
+                log_message("跳过验证，等待下期开奖后再进行验证")
+                return
+        
+        if not report_file:
+            # 查找最新的分析报告进行验证
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            report_files = glob.glob(os.path.join(script_dir, REPORT_PATTERN))
+            if report_files:
+                # 按文件修改时间排序，选择最新的
+                report_files.sort(key=os.path.getmtime, reverse=True)
+                report_file = report_files[0]
+                log_message(f"使用最新的分析报告进行验证: {os.path.basename(report_file)}")
+                verification_period = latest_period
+            else:
+                raise Exception("未找到任何分析报告文件")
+        
+        if not verification_period:
+            verification_period = latest_period
         
         # 解析推荐号码
         report_content = robust_file_read(report_file)
@@ -453,11 +490,11 @@ def main_process():
         log_message(f"解析到投注: 单式{len(rec_tickets)}注, 复式{len(complex_tickets)}注")
         
         # 获取开奖结果
-        prize_data = period_map[latest_period]
+        prize_data = period_map[verification_period]
         prize_red = prize_data['red']
         prize_blue = prize_data['blue']
         
-        log_message(f"开奖结果: 红球{prize_red} 蓝球{prize_blue}")
+        log_message(f"第{verification_period}期开奖结果: 红球{prize_red} 蓝球{prize_blue}")
         
         # 计算中奖情况
         total_prize, prize_counts, winning_details = calculate_prize(all_tickets, prize_red, prize_blue)
@@ -469,7 +506,7 @@ def main_process():
         # 生成报告记录
         report_entry = {
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'period': latest_period,
+            'period': verification_period,
             'winning_red': prize_red,
             'winning_blue': prize_blue,
             'total_bets': len(all_tickets),
@@ -492,7 +529,7 @@ def main_process():
             # 构建简洁的验证内容
             roi = ((total_prize - len(all_tickets) * 3) / (len(all_tickets) * 3) * 100) if len(all_tickets) > 0 else 0
             
-            simple_content = f"✅ 第{latest_period}期开奖验证\n\n"
+            simple_content = f"✅ 第{verification_period}期开奖验证\n\n"
             simple_content += f"🎱 开奖号码：\n"
             simple_content += f"红球: {' '.join(f'{n:02d}' for n in prize_red)}\n"
             simple_content += f"蓝球: {' '.join(f'{n:02d}' for n in prize_blue)}\n\n"
@@ -504,7 +541,7 @@ def main_process():
             # 发送简化推送
             push_result = send_wxpusher_message(
                 content=simple_content,  
-                title=f"✅ 第{latest_period}期验证"
+                title=f"✅ 第{verification_period}期验证"
             )
             
             if push_result.get("success", False):

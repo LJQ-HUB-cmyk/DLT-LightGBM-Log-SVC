@@ -58,15 +58,15 @@ PROCESSED_CSV_PATH = os.path.join(SCRIPT_DIR, 'daletou_processed.csv')
 # 运行模式配置:
 # True  -> 运行参数优化，耗时较长，但可能找到更优策略。
 # False -> 使用默认权重进行快速分析和推荐。
-ENABLE_OPTUNA_OPTIMIZATION = True
+ENABLE_OPTUNA_OPTIMIZATION = False
 
 # --------------------------
 # --- 策略开关配置 ---
 # --------------------------
 # 是否启用最终推荐组合层面的"反向思维"策略 (移除得分最高的几注)
-ENABLE_FINAL_COMBO_REVERSE = True
+ENABLE_FINAL_COMBO_REVERSE = False
 # 在启用反向思维并移除组合后，是否从候选池中补充新的组合以达到目标数量
-ENABLE_REVERSE_REFILL = True
+ENABLE_REVERSE_REFILL = False
 
 # --------------------------
 # --- 彩票规则配置 ---
@@ -82,7 +82,7 @@ RED_ZONES = {'Zone1': (1, 12), 'Zone2': (13, 24), 'Zone3': (25, 35)}
 # --- 分析与执行参数配置 ---
 # --------------------------
 # 机器学习模型使用的滞后特征阶数 (e.g., 使用前1、3、5、10期的数据作为特征)
-ML_LAG_FEATURES = [1, 3, 5, 8,10]
+ML_LAG_FEATURES = [10, 30, 50, 100,150]
 # 用于生成乘积交互特征的特征对 (e.g., 红球和值 * 红球奇数个数)
 ML_INTERACTION_PAIRS = [('red_sum', 'red_odd_count')]
 # 用于生成自身平方交互特征的特征 (e.g., 红球跨度的平方)
@@ -103,25 +103,65 @@ MIN_POSITIVE_SAMPLES_FOR_ML = 25
 # ==============================================================================
 # 这里的每一项都是一个可调整的策略参数，共同决定了最终的推荐结果。
 DEFAULT_WEIGHTS = {
-    'FREQ_SCORE_WEIGHT': 0.8,
-    'OMISSION_SCORE_WEIGHT': 1.5,
-    'MAX_OMISSION_RATIO_SCORE_WEIGHT_RED': 1.2,
-    'RECENT_FREQ_SCORE_WEIGHT_RED': 0.6,
-    'ML_PROB_SCORE_WEIGHT_RED': 1.0,
-    'BLUE_FREQ_SCORE_WEIGHT': 0.7,
-    'BLUE_OMISSION_SCORE_WEIGHT': 1.3,
-    'ML_PROB_SCORE_WEIGHT_BLUE': 0.9,
-    'TOP_N_RED_FOR_CANDIDATE': 22,
-    'TOP_N_BLUE_FOR_CANDIDATE': 10,
+    # --- 反向思维 ---
+    # 若启用反向思维，从最终推荐列表中移除得分最高的组合的比例
+    'FINAL_COMBO_REVERSE_REMOVE_TOP_PERCENT': 0.15037122540392944,
+
+    # --- 组合生成 ---
+    # 最终向用户推荐的组合（注数）数量
     'NUM_COMBINATIONS_TO_GENERATE': 12,
-    'DIVERSITY_MIN_DIFFERENT_REDS': 3,
-    'ENABLE_DISTRIBUTION_BALANCE': True,
-    'ZONE_BALANCE_FACTOR': 0.15,
-    'BLUE_BALANCE_FACTOR': 0.12,
-    'FINAL_COMBO_REVERSE_REMOVE_TOP_PERCENT': 0.05,
-    'ARM_MIN_SUPPORT': 0.008,
-    'ARM_MIN_CONFIDENCE': 0.45,
-    'ARM_MIN_LIFT': 1.3,
+    # 构建红球候选池时，从所有红球中选取分数最高的N个
+    'TOP_N_RED_FOR_CANDIDATE': 27,  # 大乐透红球数量调整
+    # 构建蓝球候选池时，从所有蓝球中选取分数最高的N个
+    'TOP_N_BLUE_FOR_CANDIDATE': 27,  # 大乐透蓝球数量调整
+
+    # --- 红球评分权重 ---
+    # 红球历史总频率得分的权重
+    'FREQ_SCORE_WEIGHT': 39.6008959202287,
+    # 红球当前遗漏值（与平均遗漏的偏差）得分的权重
+    'OMISSION_SCORE_WEIGHT': 24.23527973162876,
+    # 红球当前遗漏与其历史最大遗漏比率的得分权重
+    'MAX_OMISSION_RATIO_SCORE_WEIGHT_RED': 10.740780311553705,
+    # 红球近期出现频率的得分权重
+    'RECENT_FREQ_SCORE_WEIGHT_RED': 17.905678598769963,
+    # 红球的机器学习模型预测出现概率的得分权重
+    'ML_PROB_SCORE_WEIGHT_RED': 23.147967171896067,
+
+    # --- 蓝球评分权重 ---
+    # 蓝球历史总频率得分的权重
+    'BLUE_FREQ_SCORE_WEIGHT': 32.11137443178358,
+    # 蓝球当前遗漏值（与平均遗漏的偏差）得分的权重
+    'BLUE_OMISSION_SCORE_WEIGHT': 26.175435156323047,
+    # 蓝球的机器学习模型预测出现概率的得分权重
+    'ML_PROB_SCORE_WEIGHT_BLUE': 64.74980174190739,
+
+    # --- 组合属性匹配奖励 ---
+    # 推荐组合的红球奇数个数若与历史最常见模式匹配，获得的奖励分值
+    'COMBINATION_ODD_COUNT_MATCH_BONUS': 9.326237701278592,
+    # 推荐组合的蓝球奇偶性若与历史最常见模式匹配，获得的奖励分值
+    'COMBINATION_BLUE_ODD_MATCH_BONUS': 0.5545967879384652,
+    # 推荐组合的红球区间分布若与历史最常见模式匹配，获得的奖励分值
+    'COMBINATION_ZONE_MATCH_BONUS': 24.28802539644088,
+    # 推荐组合的蓝球大小若与历史最常见模式匹配，获得的奖励分值
+    'COMBINATION_BLUE_SIZE_MATCH_BONUS': 1.5475009230332293,
+
+    # --- 关联规则挖掘(ARM)参数与奖励 ---
+    # ARM算法的最小支持度阈值
+    'ARM_MIN_SUPPORT': 0.008761184741320602,
+    # ARM算法的最小置信度阈值
+    'ARM_MIN_CONFIDENCE': 0.7073238609360079,
+    # ARM算法的最小提升度阈值
+    'ARM_MIN_LIFT': 1.1024830828816812,
+    # 推荐组合若命中了某条挖掘出的关联规则，其获得的基础奖励分值
+    'ARM_COMBINATION_BONUS_WEIGHT': 26.491181011671237,
+    # 在计算ARM奖励时，规则的提升度(lift)对此奖励的贡献乘数因子
+    'ARM_BONUS_LIFT_FACTOR': 0.5310160537096821,
+    # 在计算ARM奖励时，规则的置信度(confidence)对此奖励的贡献乘数因子
+    'ARM_BONUS_CONF_FACTOR': 0.37464961854271794,
+
+    # --- 组合多样性控制 ---
+    # 最终推荐的任意两注组合之间，其红球号码至少要有几个是不同的
+    'DIVERSITY_MIN_DIFFERENT_REDS': 2,  # 大乐透调整为2个
 }
 
 # ==============================================================================
