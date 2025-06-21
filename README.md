@@ -169,7 +169,7 @@ git status
 git add .
 
 # 3. 提交更改
-git commit -m "📊 优化推荐号码生存逻辑"
+git commit -m "📊 优化号码组合"
 
 # 4. 推送到远程仓库
 git push origin main

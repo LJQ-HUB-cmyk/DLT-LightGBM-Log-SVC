@@ -52,7 +52,7 @@ import concurrent.futures
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # 原始大乐透数据CSV文件路径 (由 dlt_data_processor.py 生成)
 CSV_FILE_PATH = os.path.join(SCRIPT_DIR, 'daletou.csv')
-# 预处理后的数据缓存文件路径，避免每次都重新计算特征
+# 预处理后的数据缓存文件路径，当原始数据未更新时避免重复计算特征
 PROCESSED_CSV_PATH = os.path.join(SCRIPT_DIR, 'daletou_processed.csv')
 
 # 运行模式配置:
@@ -202,16 +202,16 @@ class SuppressOutput:
 def get_prize_level(red_hits: int, blue_hits: int) -> Optional[str]:
     """
     根据红球和蓝球命中数，返回大乐透的奖级名称。
-    大乐透奖级规则：
-    一等奖: 5+2
-    二等奖: 5+1
-    三等奖: 5+0
-    四等奖: 4+2
-    五等奖: 4+1、3+2
-    六等奖: 4+0、3+1、2+2
-    七等奖: 3+0、2+1、1+2、0+2
-    八等奖: 2+0、1+1、0+1
-    九等奖: 1+0、0+0
+    大乐透官方奖级规则（九等奖制）：
+    一等奖: 5+2（前区5个号码+后区2个号码全部相同）
+    二等奖: 5+1（前区5个号码+后区任意1个号码相同）
+    三等奖: 5+0（前区5个号码相同）
+    四等奖: 4+2（前区任意4个号码+后区2个号码相同）
+    五等奖: 4+1（前区任意4个号码+后区任意1个号码相同）
+    六等奖: 3+2（前区任意3个号码+后区2个号码相同）
+    七等奖: 4+0（前区任意4个号码相同）
+    八等奖: 3+1或2+2（前区任意3个号码+后区任意1个号码相同，或前区任意2个号码+后区2个号码相同）
+    九等奖: 3+0或1+2或2+1或0+2（前区任意3个号码相同，或前区任意1个号码+后区2个号码相同，或前区任意2个号码+后区任意1个号码相同，或后区2个号码相同）
     """
     if red_hits == 5 and blue_hits == 2:
         return "一等奖"
@@ -221,15 +221,15 @@ def get_prize_level(red_hits: int, blue_hits: int) -> Optional[str]:
         return "三等奖"
     elif red_hits == 4 and blue_hits == 2:
         return "四等奖"
-    elif (red_hits == 4 and blue_hits == 1) or (red_hits == 3 and blue_hits == 2):
+    elif red_hits == 4 and blue_hits == 1:
         return "五等奖"
-    elif (red_hits == 4 and blue_hits == 0) or (red_hits == 3 and blue_hits == 1) or (red_hits == 2 and blue_hits == 2):
+    elif red_hits == 3 and blue_hits == 2:
         return "六等奖"
-    elif (red_hits == 3 and blue_hits == 0) or (red_hits == 2 and blue_hits == 1) or (red_hits == 1 and blue_hits == 2) or (red_hits == 0 and blue_hits == 2):
+    elif red_hits == 4 and blue_hits == 0:
         return "七等奖"
-    elif (red_hits == 2 and blue_hits == 0) or (red_hits == 1 and blue_hits == 1) or (red_hits == 0 and blue_hits == 1):
+    elif (red_hits == 3 and blue_hits == 1) or (red_hits == 2 and blue_hits == 2):
         return "八等奖"
-    elif (red_hits == 1 and blue_hits == 0) or (red_hits == 0 and blue_hits == 0):
+    elif (red_hits == 3 and blue_hits == 0) or (red_hits == 1 and blue_hits == 2) or (red_hits == 2 and blue_hits == 1) or (red_hits == 0 and blue_hits == 2):
         return "九等奖"
     else:
         return None
@@ -1091,14 +1091,31 @@ if __name__ == "__main__":
     logger.info("--- 大乐透数据分析与推荐系统 ---")
     logger.info("启动数据加载和预处理...")
 
-    # 2. 健壮的数据加载逻辑
+    # 2. 健壮的数据加载逻辑（支持数据时效性检查）
     main_df = None
-    if os.path.exists(PROCESSED_CSV_PATH):
+    use_cache = False
+    
+    # 检查缓存文件是否存在且比原始文件新
+    if os.path.exists(PROCESSED_CSV_PATH) and os.path.exists(CSV_FILE_PATH):
+        cache_time = os.path.getmtime(PROCESSED_CSV_PATH)
+        raw_time = os.path.getmtime(CSV_FILE_PATH)
+        
+        if cache_time >= raw_time:
+            # 缓存文件更新，可以使用
+            main_df = load_data(PROCESSED_CSV_PATH)
+            if main_df is not None:
+                logger.info("从缓存文件加载预处理数据成功（缓存文件比原始文件新）。")
+                use_cache = True
+        else:
+            logger.info("检测到原始数据文件已更新，将重新处理数据...")
+    elif os.path.exists(PROCESSED_CSV_PATH):
+        logger.warning("未找到原始数据文件，尝试使用现有缓存...")
         main_df = load_data(PROCESSED_CSV_PATH)
         if main_df is not None:
-             logger.info("从缓存文件加载预处理数据成功。")
+            logger.info("从缓存文件加载预处理数据成功。")
+            use_cache = True
 
-    if main_df is None or main_df.empty:
+    if not use_cache or main_df is None or main_df.empty:
         logger.info("未找到或无法加载缓存数据，正在从原始文件生成...")
         raw_df = load_data(CSV_FILE_PATH)
         if raw_df is not None and not raw_df.empty:
@@ -1112,6 +1129,7 @@ if __name__ == "__main__":
                     try:
                         main_df.to_csv(PROCESSED_CSV_PATH, index=False)
                         logger.info(f"预处理数据已保存到: {PROCESSED_CSV_PATH}")
+                        logger.info(f"缓存已更新，下次运行将自动使用缓存（除非原始数据再次更新）")
                     except IOError as e:
                         logger.error(f"保存预处理数据失败: {e}")
                 else:
@@ -1191,9 +1209,9 @@ if __name__ == "__main__":
         logger.info(f"回测周期: 最近 {num_periods_tested} 期 | 每期注数: {num_combos_per_period} | 总投入注数: {total_bets}")
         logger.info("\n--- 1. 奖金与回报分析 ---")
         prize_dist = backtest_stats.get('prize_counts', {})
-        # 大乐透奖金设置 (基于2024年奖金水平估算)
+        # 大乐透奖金设置 (基于官方奖金规则，九等奖制)
         prize_values = {
-            '一等奖': 10000000, '二等奖': 800000, '三等奖': 10000, 
+            '一等奖': 5000000, '二等奖': 1000000, '三等奖': 10000, 
             '四等奖': 3000, '五等奖': 300, '六等奖': 200, 
             '七等奖': 100, '八等奖': 15, '九等奖': 5
         }
@@ -1213,10 +1231,14 @@ if __name__ == "__main__":
         logger.info("\n--- 3. 每期最佳命中表现 ---")
         if (best_hits_df := backtest_stats.get('best_hits_per_period')) is not None and not best_hits_df.empty:
             logger.info("  - 在一期内至少命中:")
-            # 大乐透奖级统计
+            # 大乐透奖级统计（按照官方九等奖制规则）
             for prize_name, prize_query in [
+                ("九等奖(多种)", "(`best_red_hits` == 3 and `blue_hits` == 0) or (`best_red_hits` == 1 and `blue_hits` == 2) or (`best_red_hits` == 2 and `blue_hits` == 1) or (`best_red_hits` == 0 and `blue_hits` == 2)"),
+                ("八等奖(3+1或2+2)", "(`best_red_hits` == 3 and `blue_hits` == 1) or (`best_red_hits` == 2 and `blue_hits` == 2)"),
+                ("七等奖(4+0)", "`best_red_hits` == 4 and `blue_hits` == 0"),
+                ("六等奖(3+2)", "`best_red_hits` == 3 and `blue_hits` == 2"),
+                ("五等奖(4+1)", "`best_red_hits` == 4 and `blue_hits` == 1"),
                 ("四等奖(4+2)", "`best_red_hits` == 4 and `blue_hits` == 2"),
-                ("五等奖(4+1或3+2)", "(`best_red_hits` == 4 and `blue_hits` == 1) or (`best_red_hits` == 3 and `blue_hits` == 2)"),
                 ("三等奖(5+0)", "`best_red_hits` == 5 and `blue_hits` == 0"),
                 ("二等奖(5+1)", "`best_red_hits` == 5 and `blue_hits` == 1"),
                 ("一等奖(5+2)", "`best_red_hits` == 5 and `blue_hits` == 2")
