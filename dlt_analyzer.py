@@ -58,7 +58,7 @@ PROCESSED_CSV_PATH = os.path.join(SCRIPT_DIR, 'daletou_processed.csv')
 # 运行模式配置:
 # True  -> 运行参数优化，耗时较长，但可能找到更优策略。
 # False -> 使用默认权重进行快速分析和推荐。
-ENABLE_OPTUNA_OPTIMIZATION = True
+ENABLE_OPTUNA_OPTIMIZATION = False
 
 # --------------------------
 # --- 策略开关配置 ---
