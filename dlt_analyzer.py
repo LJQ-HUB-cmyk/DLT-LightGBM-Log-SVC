@@ -162,6 +162,16 @@ DEFAULT_WEIGHTS = {
     # --- 组合多样性控制 ---
     # 最终推荐的任意两注组合之间，其红球号码至少要有几个是不同的
     'DIVERSITY_MIN_DIFFERENT_REDS': 2,  # 大乐透调整为2个
+    
+    # --- 热冷号码策略权重 (基于经验规律) ---
+    # 最近5期内出现过的号码权重加成 (热号策略)
+    'HOT_NUMBERS_5_PERIODS_WEIGHT': 25.0,
+    # 最近6期内没有出现过的号码权重加成 (冷号策略)  
+    'COLD_NUMBERS_6_PERIODS_WEIGHT': 20.0,
+    # 蓝球热号策略权重
+    'BLUE_HOT_NUMBERS_5_PERIODS_WEIGHT': 15.0,
+    # 蓝球冷号策略权重
+    'BLUE_COLD_NUMBERS_6_PERIODS_WEIGHT': 12.0,
 }
 
 # ==============================================================================
@@ -554,6 +564,51 @@ def analyze_frequency_omission(df: pd.DataFrame) -> dict:
                 recent_appearances += len(recent_window[recent_window[f'蓝球_{i}'] == ball_num])
             recent_blue_freq[ball_num] = recent_appearances
         
+        # 热冷号码分析：最近5期热号 + 6期内冷号策略
+        red_hot_5_periods = {}  # 最近5期内出现过的红球
+        red_cold_6_periods = {}  # 最近6期内没有出现过的红球
+        blue_hot_5_periods = {}  # 最近5期内出现过的蓝球
+        blue_cold_6_periods = {}  # 最近6期内没有出现过的蓝球
+        
+        # 分析红球热冷号码
+        recent_5_periods = df.tail(5) if len(df) >= 5 else df
+        recent_6_periods = df.tail(6) if len(df) >= 6 else df
+        
+        for ball_num in RED_BALL_RANGE:
+            # 检查是否在最近5期内出现过
+            appeared_in_5 = False
+            for i in range(1, 6):  # 5个红球
+                if len(recent_5_periods[recent_5_periods[f'红球_{i}'] == ball_num]) > 0:
+                    appeared_in_5 = True
+                    break
+            red_hot_5_periods[ball_num] = 1 if appeared_in_5 else 0
+            
+            # 检查是否在最近6期内没有出现过
+            appeared_in_6 = False
+            for i in range(1, 6):  # 5个红球
+                if len(recent_6_periods[recent_6_periods[f'红球_{i}'] == ball_num]) > 0:
+                    appeared_in_6 = True
+                    break
+            red_cold_6_periods[ball_num] = 1 if not appeared_in_6 else 0
+        
+        # 分析蓝球热冷号码
+        for ball_num in BLUE_BALL_RANGE:
+            # 检查是否在最近5期内出现过
+            appeared_in_5 = False
+            for i in range(1, 3):  # 2个蓝球
+                if len(recent_5_periods[recent_5_periods[f'蓝球_{i}'] == ball_num]) > 0:
+                    appeared_in_5 = True
+                    break
+            blue_hot_5_periods[ball_num] = 1 if appeared_in_5 else 0
+            
+            # 检查是否在最近6期内没有出现过
+            appeared_in_6 = False
+            for i in range(1, 3):  # 2个蓝球
+                if len(recent_6_periods[recent_6_periods[f'蓝球_{i}'] == ball_num]) > 0:
+                    appeared_in_6 = True
+                    break
+            blue_cold_6_periods[ball_num] = 1 if not appeared_in_6 else 0
+
         # 构建包含所有必要数据的结果字典
         result = {
             'red_freq': red_freq,
@@ -570,6 +625,11 @@ def analyze_frequency_omission(df: pd.DataFrame) -> dict:
             'blue_current_omission': blue_omission,  # 当前遗漏（蓝球）
             'blue_average_interval': blue_avg_interval,  # 平均间隔（蓝球）
             'recent_N_freq_blue': recent_blue_freq,  # 近期频率（蓝球）
+            # 新增热冷号码分析
+            'red_hot_5_periods': red_hot_5_periods,  # 红球5期热号
+            'red_cold_6_periods': red_cold_6_periods,  # 红球6期冷号
+            'blue_hot_5_periods': blue_hot_5_periods,  # 蓝球5期热号
+            'blue_cold_6_periods': blue_cold_6_periods,  # 蓝球6期冷号
         }
         
         logger.info("频率和遗漏分析完成")
@@ -768,6 +828,12 @@ def calculate_scores(freq_data: Dict, probabilities: Dict, weights: Dict) -> Dic
     max_hist_o, recent_freq = freq_data.get('max_historical_omission_red', {}), freq_data.get('recent_N_freq_red', {})
     r_pred, b_pred = probabilities.get('red', {}), probabilities.get('blue', {})
     
+    # 获取热冷号码分析数据
+    red_hot_5 = freq_data.get('red_hot_5_periods', {})
+    red_cold_6 = freq_data.get('red_cold_6_periods', {})
+    blue_hot_5 = freq_data.get('blue_hot_5_periods', {})
+    blue_cold_6 = freq_data.get('blue_cold_6_periods', {})
+    
     # 红球评分
     for num in RED_BALL_RANGE:
         # 频率分：出现次数越多，得分越高
@@ -781,7 +847,12 @@ def calculate_scores(freq_data: Dict, probabilities: Dict, weights: Dict) -> Dic
         recent_s = recent_freq.get(num, 0) * weights['RECENT_FREQ_SCORE_WEIGHT_RED']
         # ML预测分
         ml_s = r_pred.get(num, 0.0) * weights['ML_PROB_SCORE_WEIGHT_RED']
-        r_scores[num] = sum([freq_s, omit_s, max_o_s, recent_s, ml_s])
+        # 热号加成：最近5期内出现过的号码
+        hot_bonus = red_hot_5.get(num, 0) * weights['HOT_NUMBERS_5_PERIODS_WEIGHT']
+        # 冷号加成：最近6期内没有出现过的号码
+        cold_bonus = red_cold_6.get(num, 0) * weights['COLD_NUMBERS_6_PERIODS_WEIGHT']
+        
+        r_scores[num] = sum([freq_s, omit_s, max_o_s, recent_s, ml_s, hot_bonus, cold_bonus])
         
     # 蓝球评分
     blue_omission = freq_data.get('blue_current_omission', {})
@@ -792,7 +863,12 @@ def calculate_scores(freq_data: Dict, probabilities: Dict, weights: Dict) -> Dic
         freq_s = (b_freq.get(num, 0)) * weights['BLUE_FREQ_SCORE_WEIGHT']
         omit_s = np.exp(-0.01 * (blue_omission.get(num, 0) - blue_avg_int.get(num, 0))**2) * weights['BLUE_OMISSION_SCORE_WEIGHT']
         ml_s = b_pred.get(num, 0.0) * weights['ML_PROB_SCORE_WEIGHT_BLUE']
-        b_scores[num] = sum([freq_s, omit_s, ml_s])
+        # 蓝球热号加成：最近5期内出现过的号码
+        blue_hot_bonus = blue_hot_5.get(num, 0) * weights['BLUE_HOT_NUMBERS_5_PERIODS_WEIGHT']
+        # 蓝球冷号加成：最近6期内没有出现过的号码
+        blue_cold_bonus = blue_cold_6.get(num, 0) * weights['BLUE_COLD_NUMBERS_6_PERIODS_WEIGHT']
+        
+        b_scores[num] = sum([freq_s, omit_s, ml_s, blue_hot_bonus, blue_cold_bonus])
 
     # 归一化所有分数到0-100范围，便于比较
     def normalize_scores(scores_dict):
@@ -1241,6 +1317,26 @@ if __name__ == "__main__":
         # 采用分区平衡的复式选择策略，避免大号偏向
         r_scores = final_scores['red_scores']
         b_scores = final_scores['blue_scores']
+        
+        # 显示热冷号码分析
+        logger.info("\n--- 热冷号码分析 (基于经验规律) ---")
+        freq_analysis = analyze_frequency_omission(main_df)
+        
+        # 红球热号（最近5期内出现过）
+        red_hot_nums = [num for num in RED_BALL_RANGE if freq_analysis.get('red_hot_5_periods', {}).get(num, 0) == 1]
+        # 红球冷号（最近6期内未出现）
+        red_cold_nums = [num for num in RED_BALL_RANGE if freq_analysis.get('red_cold_6_periods', {}).get(num, 0) == 1]
+        # 蓝球热号
+        blue_hot_nums = [num for num in BLUE_BALL_RANGE if freq_analysis.get('blue_hot_5_periods', {}).get(num, 0) == 1]
+        # 蓝球冷号
+        blue_cold_nums = [num for num in BLUE_BALL_RANGE if freq_analysis.get('blue_cold_6_periods', {}).get(num, 0) == 1]
+        
+        logger.info(f"  红球热号(最近5期): {' '.join(f'{n:02d}' for n in sorted(red_hot_nums))} (共{len(red_hot_nums)}个)")
+        logger.info(f"  红球冷号(6期未出): {' '.join(f'{n:02d}' for n in sorted(red_cold_nums))} (共{len(red_cold_nums)}个)")
+        logger.info(f"  蓝球热号(最近5期): {' '.join(f'{n:02d}' for n in sorted(blue_hot_nums))} (共{len(blue_hot_nums)}个)")
+        logger.info(f"  蓝球冷号(6期未出): {' '.join(f'{n:02d}' for n in sorted(blue_cold_nums))} (共{len(blue_cold_nums)}个)")
+        logger.info(f"  策略权重: 红球热号{DEFAULT_WEIGHTS['HOT_NUMBERS_5_PERIODS_WEIGHT']} + 冷号{DEFAULT_WEIGHTS['COLD_NUMBERS_6_PERIODS_WEIGHT']}")
+        logger.info(f"  策略权重: 蓝球热号{DEFAULT_WEIGHTS['BLUE_HOT_NUMBERS_5_PERIODS_WEIGHT']} + 冷号{DEFAULT_WEIGHTS['BLUE_COLD_NUMBERS_6_PERIODS_WEIGHT']}")
         
         # 红球分区选择：确保各区间平衡
         zone_reds = {1: [], 2: [], 3: []}
