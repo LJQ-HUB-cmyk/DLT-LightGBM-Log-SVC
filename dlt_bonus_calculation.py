@@ -42,17 +42,17 @@ MAIN_REPORT_FILE = "latest_dlt_calculation.txt"
 MAX_NORMAL_RECORDS = 10  # 保留最近10次评估
 MAX_ERROR_LOGS = 20      # 保留最近20条错误日志
 
-# 大乐透奖金对照表 (元) - 根据实际大乐透奖金设置
+# 大乐透奖金对照表 (元) - 官方标准奖金设置
 PRIZE_TABLE = {
-    1: 10_000_000,  # 一等奖 (浮动，此处为估算)
-    2: 500_000,     # 二等奖 (浮动，此处为估算)
-    3: 10_000,      # 三等奖
-    4: 3_000,       # 四等奖
-    5: 300,         # 五等奖
-    6: 200,         # 六等奖
-    7: 100,         # 七等奖
-    8: 15,          # 八等奖
-    9: 5,           # 九等奖
+    1: 10_000_000,  # 一等奖 (1000万元，浮动)
+    2: 300_000,     # 二等奖 (30万元，浮动)
+    3: 10_000,      # 三等奖 (1万元，固定)
+    4: 3_000,       # 四等奖 (3000元，固定)
+    5: 300,         # 五等奖 (300元，固定)
+    6: 200,         # 六等奖 (200元，固定)
+    7: 100,         # 七等奖 (100元，固定)
+    8: 15,          # 八等奖 (15元，固定)
+    9: 5,           # 九等奖 (5元，固定)
 }
 
 # ==============================================================================
@@ -287,7 +287,7 @@ def calculate_prize(tickets: List, prize_red: List, prize_blue: List) -> Tuple[i
         red_hits = len(set(red_ticket) & set(prize_red))
         blue_hits = len(set(blue_ticket) & set(prize_blue))
         
-        # 根据大乐透规则确定奖级
+        # 根据大乐透官方规则确定奖级
         prize_level = None
         if red_hits == 5 and blue_hits == 2:
             prize_level = 1  # 一等奖
@@ -297,15 +297,15 @@ def calculate_prize(tickets: List, prize_red: List, prize_blue: List) -> Tuple[i
             prize_level = 3  # 三等奖
         elif red_hits == 4 and blue_hits == 2:
             prize_level = 4  # 四等奖
-        elif (red_hits == 4 and blue_hits == 1) or (red_hits == 3 and blue_hits == 2):
+        elif red_hits == 4 and blue_hits == 1:
             prize_level = 5  # 五等奖
-        elif (red_hits == 4 and blue_hits == 0) or (red_hits == 3 and blue_hits == 1) or (red_hits == 2 and blue_hits == 2):
+        elif red_hits == 3 and blue_hits == 2:
             prize_level = 6  # 六等奖
-        elif (red_hits == 3 and blue_hits == 0) or (red_hits == 2 and blue_hits == 1) or (red_hits == 1 and blue_hits == 2) or (red_hits == 0 and blue_hits == 2):
+        elif red_hits == 4 and blue_hits == 0:
             prize_level = 7  # 七等奖
-        elif (red_hits == 2 and blue_hits == 0) or (red_hits == 1 and blue_hits == 1) or (red_hits == 0 and blue_hits == 1):
+        elif (red_hits == 3 and blue_hits == 1) or (red_hits == 2 and blue_hits == 2):
             prize_level = 8  # 八等奖
-        elif (red_hits == 1 and blue_hits == 0) or (red_hits == 0 and blue_hits == 0):
+        elif (red_hits == 3 and blue_hits == 0) or (red_hits == 1 and blue_hits == 2) or (red_hits == 2 and blue_hits == 1) or (red_hits == 0 and blue_hits == 2):
             prize_level = 9  # 九等奖
         
         if prize_level:

@@ -7,13 +7,19 @@
 号码推荐。脚本支持两种运行模式，由全局变量 `ENABLE_OPTUNA_OPTIMIZATION` 控制：
 
 1.  **分析模式 (默认 `False`)**:
-    使用内置的 `DEFAULT_WEIGHTS` 权重，执行一次完整的历史数据分析、策略回测，
-    并为下一期生成推荐号码。所有结果会输出到一个带时间戳的详细报告文件中。
+    使用内置的 `DEFAULT_WEIGHTS` 权重，基于滑动窗口数据进行频率/模式/关联分析、
+    策略回测，并为下一期生成推荐号码。所有结果会输出到一个带时间戳的详细报告文件中。
 
 2.  **优化模式 (`True`)**:
     在分析前，首先运行 Optuna 框架进行参数搜索，以找到在近期历史数据上
     表现最佳的一组权重。然后，自动使用这组优化后的权重来完成后续的分析、
     回测和推荐。优化过程和结果也会记录在报告中。
+
+**数据窗口策略**:
+- 频率分析：使用最近50期数据（避免历史热号偏向）
+- 模式分析：使用最近100期数据（捕捉中期模式）
+- 关联规则：使用最近200期数据（确保规则挖掘的样本充足）
+- 机器学习：使用全部历史数据（保证模型训练的样本量）
 
 版本: 5.1 (大乐透适配版)
 """
@@ -89,6 +95,11 @@ ML_INTERACTION_PAIRS = [('red_sum', 'red_odd_count')]
 ML_INTERACTION_SELF = ['red_span']
 # 计算号码"近期"出现频率时所参考的期数窗口大小
 RECENT_FREQ_WINDOW = 50
+# 计算主要频率分析时所参考的期数窗口大小 (用于替代全历史数据)
+MAIN_FREQ_WINDOW = 50
+# 关联规则挖掘和模式分析的窗口大小
+ASSOCIATION_ANALYSIS_WINDOW = 50
+PATTERN_ANALYSIS_WINDOW = 100
 # 在分析模式下，进行策略回测时所评估的总期数
 BACKTEST_PERIODS_COUNT = 100
 # 在优化模式下，每次试验用于快速评估性能的回测期数 (数值越小优化越快)
@@ -252,16 +263,17 @@ class SuppressOutput:
 def get_prize_level(red_hits: int, blue_hits: int) -> Optional[str]:
     """
     根据红球和蓝球命中数，返回大乐透的奖级名称。
-    大乐透奖级规则：
-    一等奖: 5+2
-    二等奖: 5+1
-    三等奖: 5+0
-    四等奖: 4+2
-    五等奖: 4+1、3+2
-    六等奖: 4+0、3+1、2+2
-    七等奖: 3+0、2+1、1+2、0+2
-    八等奖: 2+0、1+1、0+1
-    九等奖: 1+0、0+0
+    
+    官方大乐透奖级规则：
+    一等奖：5+2
+    二等奖：5+1  
+    三等奖：5+0
+    四等奖：4+2
+    五等奖：4+1
+    六等奖：3+2
+    七等奖：4+0
+    八等奖：3+1 或 2+2
+    九等奖：3+0 或 1+2 或 2+1 或 0+2
     """
     if red_hits == 5 and blue_hits == 2:
         return "一等奖"
@@ -271,15 +283,15 @@ def get_prize_level(red_hits: int, blue_hits: int) -> Optional[str]:
         return "三等奖"
     elif red_hits == 4 and blue_hits == 2:
         return "四等奖"
-    elif (red_hits == 4 and blue_hits == 1) or (red_hits == 3 and blue_hits == 2):
+    elif red_hits == 4 and blue_hits == 1:
         return "五等奖"
-    elif (red_hits == 4 and blue_hits == 0) or (red_hits == 3 and blue_hits == 1) or (red_hits == 2 and blue_hits == 2):
+    elif red_hits == 3 and blue_hits == 2:
         return "六等奖"
-    elif (red_hits == 3 and blue_hits == 0) or (red_hits == 2 and blue_hits == 1) or (red_hits == 1 and blue_hits == 2) or (red_hits == 0 and blue_hits == 2):
+    elif red_hits == 4 and blue_hits == 0:
         return "七等奖"
-    elif (red_hits == 2 and blue_hits == 0) or (red_hits == 1 and blue_hits == 1) or (red_hits == 0 and blue_hits == 1):
+    elif (red_hits == 3 and blue_hits == 1) or (red_hits == 2 and blue_hits == 2):
         return "八等奖"
-    elif (red_hits == 1 and blue_hits == 0) or (red_hits == 0 and blue_hits == 0):
+    elif (red_hits == 3 and blue_hits == 0) or (red_hits == 1 and blue_hits == 2) or (red_hits == 2 and blue_hits == 1) or (red_hits == 0 and blue_hits == 2):
         return "九等奖"
     else:
         return None
@@ -466,28 +478,34 @@ def analyze_frequency_omission(df: pd.DataFrame) -> dict:
         
         result = {}
         
+        # 使用最近N期数据进行主要分析，而非全部历史数据
+        analysis_window = df.tail(MAIN_FREQ_WINDOW) if len(df) >= MAIN_FREQ_WINDOW else df
+        logger.info(f"使用最近{len(analysis_window)}期数据进行频率分析 (窗口大小: {MAIN_FREQ_WINDOW}期)")
+        
         # 红球分析
         red_freq = {}
         red_omission = {}
         red_max_omission = {}
         
         for ball_num in RED_BALL_RANGE:
-            # 计算历史频率
+            # 计算滑动窗口内的频率
             appearances = []
             for i in range(1, 6):  # 5个红球
-                appearances.extend(df[df[f'红球_{i}'] == ball_num].index.tolist())
+                appearances.extend(analysis_window[analysis_window[f'红球_{i}'] == ball_num].index.tolist())
             
             red_freq[ball_num] = len(appearances)
             
-            # 计算当前遗漏和最大遗漏
+            # 计算当前遗漏和最大遗漏（基于分析窗口）
             if appearances:
-                current_omission = len(df) - 1 - max(appearances)
+                # 当前遗漏基于分析窗口的最后一期
+                current_omission = len(analysis_window) - 1 - (max(appearances) - analysis_window.index[0])
                 red_omission[ball_num] = current_omission
                 
-                # 计算最大遗漏
+                # 计算最大遗漏（基于分析窗口内的间隔）
                 gaps = []
                 prev_idx = -1
-                for idx in sorted(appearances):
+                window_relative_appearances = [idx - analysis_window.index[0] for idx in sorted(appearances)]
+                for idx in window_relative_appearances:
                     if prev_idx >= 0:
                         gaps.append(idx - prev_idx - 1)
                     prev_idx = idx
@@ -495,8 +513,8 @@ def analyze_frequency_omission(df: pd.DataFrame) -> dict:
                 
                 red_max_omission[ball_num] = max(gaps) if gaps else current_omission
             else:
-                red_omission[ball_num] = len(df)
-                red_max_omission[ball_num] = len(df)
+                red_omission[ball_num] = len(analysis_window)
+                red_max_omission[ball_num] = len(analysis_window)
         
         # 蓝球分析
         blue_freq = {}
@@ -504,22 +522,24 @@ def analyze_frequency_omission(df: pd.DataFrame) -> dict:
         blue_max_omission = {}
         
         for ball_num in BLUE_BALL_RANGE:
-            # 计算历史频率
+            # 计算滑动窗口内的频率
             appearances = []
             for i in range(1, 3):  # 2个蓝球
-                appearances.extend(df[df[f'蓝球_{i}'] == ball_num].index.tolist())
+                appearances.extend(analysis_window[analysis_window[f'蓝球_{i}'] == ball_num].index.tolist())
             
             blue_freq[ball_num] = len(appearances)
             
-            # 计算当前遗漏和最大遗漏
+            # 计算当前遗漏和最大遗漏（基于分析窗口）
             if appearances:
-                current_omission = len(df) - 1 - max(appearances)
+                # 当前遗漏基于分析窗口的最后一期
+                current_omission = len(analysis_window) - 1 - (max(appearances) - analysis_window.index[0])
                 blue_omission[ball_num] = current_omission
                 
-                # 计算最大遗漏
+                # 计算最大遗漏（基于分析窗口内的间隔）
                 gaps = []
                 prev_idx = -1
-                for idx in sorted(appearances):
+                window_relative_appearances = [idx - analysis_window.index[0] for idx in sorted(appearances)]
+                for idx in window_relative_appearances:
                     if prev_idx >= 0:
                         gaps.append(idx - prev_idx - 1)
                     prev_idx = idx
@@ -527,8 +547,8 @@ def analyze_frequency_omission(df: pd.DataFrame) -> dict:
                 
                 blue_max_omission[ball_num] = max(gaps) if gaps else current_omission
             else:
-                blue_omission[ball_num] = len(df)
-                blue_max_omission[ball_num] = len(df)
+                blue_omission[ball_num] = len(analysis_window)
+                blue_max_omission[ball_num] = len(analysis_window)
         
         # 计算平均间隔和近期频率
         red_avg_interval = {}
@@ -539,9 +559,9 @@ def analyze_frequency_omission(df: pd.DataFrame) -> dict:
         # 红球平均间隔和近期频率
         for ball_num in RED_BALL_RANGE:
             if red_freq[ball_num] > 0:
-                red_avg_interval[ball_num] = len(df) / red_freq[ball_num]
+                red_avg_interval[ball_num] = len(analysis_window) / red_freq[ball_num]
             else:
-                red_avg_interval[ball_num] = len(df)
+                red_avg_interval[ball_num] = len(analysis_window)
             
             # 近期频率 (最近RECENT_FREQ_WINDOW期)
             recent_window = df.tail(RECENT_FREQ_WINDOW) if len(df) >= RECENT_FREQ_WINDOW else df
@@ -553,9 +573,9 @@ def analyze_frequency_omission(df: pd.DataFrame) -> dict:
         # 蓝球平均间隔和近期频率
         for ball_num in BLUE_BALL_RANGE:
             if blue_freq[ball_num] > 0:
-                blue_avg_interval[ball_num] = len(df) / blue_freq[ball_num]
+                blue_avg_interval[ball_num] = len(analysis_window) / blue_freq[ball_num]
             else:
-                blue_avg_interval[ball_num] = len(df)
+                blue_avg_interval[ball_num] = len(analysis_window)
             
             # 近期频率 (最近RECENT_FREQ_WINDOW期)
             recent_window = df.tail(RECENT_FREQ_WINDOW) if len(df) >= RECENT_FREQ_WINDOW else df
@@ -650,19 +670,24 @@ def analyze_patterns(df: pd.DataFrame) -> dict:
         dict: 包含最常见模式的字典。
     """
     if df is None or df.empty: return {}
+    
+    # 使用最近N期数据进行模式分析，而非全部历史数据
+    pattern_window = df.tail(PATTERN_ANALYSIS_WINDOW) if len(df) >= PATTERN_ANALYSIS_WINDOW else df
+    logger.info(f"使用最近{len(pattern_window)}期数据进行模式分析 (窗口大小: {PATTERN_ANALYSIS_WINDOW}期)")
+    
     res = {}
     def safe_mode(s): return s.mode().iloc[0] if not s.empty and not s.mode().empty else None
     
     for col, name in [('red_sum', 'sum'), ('red_span', 'span'), ('red_odd_count', 'odd_count')]:
-        if col in df.columns: res[f'most_common_{name}'] = safe_mode(df[col])
+        if col in pattern_window.columns: res[f'most_common_{name}'] = safe_mode(pattern_window[col])
         
     zone_cols = [f'red_{zone.lower()}_count' for zone in RED_ZONES.keys()]
-    if all(c in df.columns for c in zone_cols):
-        dist_counts = df[zone_cols].apply(tuple, axis=1).value_counts()
+    if all(c in pattern_window.columns for c in zone_cols):
+        dist_counts = pattern_window[zone_cols].apply(tuple, axis=1).value_counts()
         if not dist_counts.empty: res['most_common_zone_distribution'] = dist_counts.index[0]
         
-    if 'blue_odd_count' in df.columns: res['most_common_blue_is_odd'] = safe_mode(df['blue_odd_count'] > 0)
-    if 'blue_big_count' in df.columns: res['most_common_blue_is_large'] = safe_mode(df['blue_big_count'] > 0)
+    if 'blue_odd_count' in pattern_window.columns: res['most_common_blue_is_odd'] = safe_mode(pattern_window['blue_odd_count'] > 0)
+    if 'blue_big_count' in pattern_window.columns: res['most_common_blue_is_large'] = safe_mode(pattern_window['blue_big_count'] > 0)
     
     return res
 
@@ -683,8 +708,12 @@ def analyze_associations(df: pd.DataFrame, weights_config: Dict) -> pd.DataFrame
     red_cols = [f'红球_{i}' for i in range(1, 6)]  # 大乐透5个红球
     if df is None or df.empty: return pd.DataFrame()
     
+    # 使用最近N期数据进行关联规则挖掘，而非全部历史数据
+    association_window = df.tail(ASSOCIATION_ANALYSIS_WINDOW) if len(df) >= ASSOCIATION_ANALYSIS_WINDOW else df
+    logger.info(f"使用最近{len(association_window)}期数据进行关联规则分析 (窗口大小: {ASSOCIATION_ANALYSIS_WINDOW}期)")
+    
     try:
-        transactions = df[red_cols].astype(str).values.tolist()
+        transactions = association_window[red_cols].astype(str).values.tolist()
         te = TransactionEncoder()
         te_ary = te.fit(transactions).transform(transactions)
         df_oh = pd.DataFrame(te_ary, columns=te.columns_)
