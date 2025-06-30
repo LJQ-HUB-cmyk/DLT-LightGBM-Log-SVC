@@ -1,4 +1,4 @@
-# 大乐透智能预测分析系统
+# DLT智能预测分析系统
 
 [![GitHub](https://img.shields.io/badge/GitHub-DLT--LightGBM--Log--SVC-blue?logo=github)](https://github.com/LJQ-HUB-cmyk/DLT-LightGBM-Log-SVC)
 [![Python](https://img.shields.io/badge/Python-3.8+-brightgreen?logo=python)](https://www.python.org/)
@@ -169,7 +169,7 @@ git status
 git add .
 
 # 3. 提交更改
-git commit -m "📊 新增最近5期内开出过的号码 + 6期内没有开出过号码"
+git commit -m "📊 优化滑动窗口逻辑"
 
 # 4. 推送到远程仓库
 git push origin main

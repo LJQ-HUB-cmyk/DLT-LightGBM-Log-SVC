@@ -24,6 +24,7 @@ import io
 import logging
 from contextlib import redirect_stdout, redirect_stderr
 import csv
+from datetime import datetime, timedelta
 
 # ==============================================================================
 # --- 配置区 ---
@@ -102,17 +103,77 @@ class SuppressOutput:
 # --- 数据获取模块 ---
 # ==============================================================================
 
+def infer_date_from_period(period: str, existing_data: list = None) -> str:
+    """
+    根据期号推算日期。大乐透每周一、三、六开奖。
+    
+    Args:
+        period (str): 期号，格式如 "25042" 
+        existing_data (list): 现有数据，用于获取参考日期
+        
+    Returns:
+        str: 推算的日期，格式为 YYYY-MM-DD
+    """
+    try:
+        # 解析期号：前2位是年份（2025 -> 25），后3位是期号
+        if len(period) == 5:
+            year = 2000 + int(period[:2])
+            period_num = int(period[2:])
+        else:
+            # 对于较早期号，可能是其他格式
+            return ""
+            
+        # 每年大约有156期（一年52周 × 3期/周）
+        # 每期间隔约2-3天，这里使用平均2.33天（一年365天/156期）
+        
+        # 2025年第一期的日期是2025-01-01
+        if year == 2025:
+            base_date = datetime(2025, 1, 1)
+            # 计算从第一期到当前期的天数
+            days_offset = (period_num - 1) * 2.33  # 平均每期间隔2.33天
+            
+            # 调整到最近的开奖日（周一、三、六）
+            target_date = base_date + timedelta(days=int(days_offset))
+            
+            # 调整到最近的开奖日
+            weekday = target_date.weekday()  # 0=Monday, 2=Wednesday, 5=Saturday
+            if weekday not in [0, 2, 5]:
+                # 找到最近的开奖日
+                days_to_next = min(
+                    (0 - weekday) % 7,  # 到下周一
+                    (2 - weekday) % 7,  # 到本周三或下周三
+                    (5 - weekday) % 7   # 到本周六或下周六
+                )
+                if days_to_next > 3:  # 如果距离太远，找前一个开奖日
+                    days_to_prev = min(
+                        (weekday - 0) if weekday > 0 else 7,  # 到上周一
+                        (weekday - 2) if weekday > 2 else 7,  # 到上周三  
+                        (weekday - 5) if weekday > 5 else 7   # 到上周六
+                    )
+                    target_date = target_date - timedelta(days=days_to_prev)
+                else:
+                    target_date = target_date + timedelta(days=days_to_next)
+            
+            return target_date.strftime('%Y-%m-%d')
+            
+        # 对于其他年份，可以根据需要扩展
+        return ""
+        
+    except (ValueError, IndexError):
+        return ""
+
+
 def fetch_latest_data_from_html(url: str = HTML_DATA_URL) -> list:
     """
     从指定的HTML网页抓取最新的大乐透数据。
-    注意：此数据源通常不包含开奖日期。
+    注意：此数据源通常不包含开奖日期，但我们会尝试推算日期。
 
     Args:
         url (str): 目标网页的URL。
 
     Returns:
         list: 一个包含字典的列表，每个字典代表一期数据，格式为
-              {'期号': '...', '红球': '...', '蓝球': '...'}。
+              {'期号': '...', '红球': '...', '蓝球': '...', '日期': '...'}。
               如果失败则返回空列表。
     """
     logger.info("正在从HTML网页抓取最新大乐透数据...")
@@ -161,10 +222,14 @@ def fetch_latest_data_from_html(url: str = HTML_DATA_URL) -> list:
                 if not all(1 <= b <= 12 for b in blue_numbers):
                     continue
 
+                # 推算日期
+                inferred_date = infer_date_from_period(period_text)
+
                 data.append({
                     '期号': period_text,
                     '红球': red_balls_str,
-                    '蓝球': blue_balls_str
+                    '蓝球': blue_balls_str,
+                    '日期': inferred_date  # 添加推算的日期
                 })
             except (ValueError, IndexError) as e:
                 logger.warning(f"解析表格行时出错: {row.text.strip()}. 错误: {e}. 跳过此行。")

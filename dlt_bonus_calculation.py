@@ -137,17 +137,17 @@ def get_period_data_from_csv(csv_content: str) -> Tuple[Optional[Dict], Optional
         
     return period_map, sorted(periods_list, key=int)
 
-def find_matching_report(target_period: str) -> Optional[str]:
+def find_matching_report(target_prediction_period: str) -> Optional[str]:
     """
-    在当前目录查找其数据截止期与 `target_period` 匹配的最新分析报告。
+    在当前目录查找预测目标期号为 `target_prediction_period` 的最新分析报告。
 
     Args:
-        target_period (str): 目标报告的数据截止期号。
+        target_prediction_period (str): 目标预测期号。
 
     Returns:
         Optional[str]: 找到的报告文件的路径，如果未找到则返回 None。
     """
-    log_message(f"正在查找数据截止期为 {target_period} 的分析报告...")
+    log_message(f"正在查找预测期号为 {target_prediction_period} 的分析报告...")
     candidates = []
     # 使用 SCRIPT_DIR 确保在任何工作目录下都能找到与脚本同级的报告文件
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -155,8 +155,9 @@ def find_matching_report(target_period: str) -> Optional[str]:
         content = robust_file_read(file_path)
         if not content: continue
         
-        match = re.search(r'分析基于数据:\s*截至\s*(\d+)\s*期', content)
-        if match and match.group(1) == target_period:
+        # 修改匹配逻辑：查找"本次预测目标: 第 XXX 期"
+        match = re.search(r'本次预测目标:\s*第\s*(\d+)\s*期', content)
+        if match and match.group(1) == target_prediction_period:
             try:
                 # 从文件名中提取时间戳以确定最新报告
                 timestamp_str_match = re.search(r'_(\d{8}_\d{6})\.txt$', file_path)
@@ -168,7 +169,7 @@ def find_matching_report(target_period: str) -> Optional[str]:
                 continue
     
     if not candidates:
-        log_message(f"未找到数据截止期为 {target_period} 的分析报告。", "WARNING")
+        log_message(f"未找到预测期号为 {target_prediction_period} 的分析报告。", "WARNING")
         return None
         
     candidates.sort(reverse=True)
@@ -422,16 +423,15 @@ def main_process():
         if not period_map or len(periods_list) < 2:
             raise Exception("CSV数据不足或解析失败")
         
-        # 确定评估期和报告期
+        # 确定评估期（要验证的已开奖期号）
         latest_period = periods_list[-1]
-        report_period = periods_list[-2]
         
-        log_message(f"最新期号: {latest_period}, 报告期号: {report_period}")
+        log_message(f"要验证的期号: {latest_period}")
         
-        # 查找匹配的分析报告
-        report_file = find_matching_report(report_period)
+        # 查找预测该期号的分析报告
+        report_file = find_matching_report(latest_period)
         if not report_file:
-            raise Exception(f"未找到期号 {report_period} 的分析报告")
+            raise Exception(f"未找到预测期号 {latest_period} 的分析报告")
         
         # 解析推荐号码
         report_content = robust_file_read(report_file)
@@ -517,13 +517,6 @@ def main_process():
         log_message(error_msg, "ERROR")
         manage_report(new_error=error_msg)
         log_message(f"详细错误:\n{traceback.format_exc()}", "ERROR")
-        
-        # 发送错误通知
-        try:
-            from wxPusher import send_error_notification
-            send_error_notification(error_msg, "大乐透验证系统")
-        except:
-            pass  # 忽略推送错误，避免二次异常
 
 if __name__ == "__main__":
     main_process() 

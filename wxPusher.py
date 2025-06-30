@@ -63,27 +63,31 @@ def send_wxpusher_message(content: str, title: str = None, topicIds: List[int] =
         return {"success": False, "error": f"未知异常: {str(e)}"}
 
 def send_analysis_report(report_content: str, period: int, recommendations: List[str], 
-                         complex_red: List[str] = None, complex_blue: List[str] = None) -> Dict:
+                         complex_red: List[str] = None, complex_blue: List[str] = None,
+                         hot_cold_info: Dict = None, distribution_info: Dict = None, 
+                         backtest_info: Dict = None) -> Dict:
     """发送大乐透分析报告
     
     Args:
-        report_content: 完整的分析报告内容
+        report_content: 报告内容（文件名或内容）
         period: 预测期号
         recommendations: 推荐号码列表
-        complex_red: 复式红球列表
-        complex_blue: 复式蓝球列表
+        complex_red: 复式红球列表（可选）
+        complex_blue: 复式蓝球列表（可选）
+        hot_cold_info: 热冷号码分析信息（可选）
+        distribution_info: 号码分布分析信息（可选）
+        backtest_info: 回测性能信息（可选）
     
     Returns:
         推送结果字典
     """
     title = f"🎯 大乐透第{period}期预测报告"
     
-    # 提取关键信息制作详细版推送
+    # 提取关键信息制作完整版推送
     try:
-        # 构建单式推荐内容
+        # 构建单式推荐内容 - 显示所有推荐号码
         rec_summary = ""
         if recommendations:
-            # 显示所有推荐号码
             for i, rec in enumerate(recommendations):
                 rec_summary += f"{rec}\n"
                 # 每5注换行一次，便于阅读
@@ -106,18 +110,41 @@ def send_analysis_report(report_content: str, period: int, recommendations: List
 💡 复式共可组成 {total_combinations:,} 注
 💰 投注成本: {total_combinations * 3:,} 元(单注3元)"""
         
-        # 构建推送内容
+        # 构建热冷号码分析内容
+        hot_cold_summary = ""
+        if hot_cold_info:
+            hot_cold_summary = f"""
+📈 热冷号码分析：
+🔥 红球热号({hot_cold_info.get('red_hot_count', 0)}个): {hot_cold_info.get('red_hot', '')}
+❄️ 红球冷号({hot_cold_info.get('red_cold_count', 0)}个): {hot_cold_info.get('red_cold', '')}
+🔥 蓝球热号({hot_cold_info.get('blue_hot_count', 0)}个): {hot_cold_info.get('blue_hot', '')}
+❄️ 蓝球冷号({hot_cold_info.get('blue_cold_count', 0)}个): {hot_cold_info.get('blue_cold', '')}"""
+
+        # 构建分布分析内容
+        distribution_summary = ""
+        if distribution_info:
+            distribution_summary = f"""
+📊 号码分布分析：
+红球分布: 小区{distribution_info.get('red_small', 0)}个 | 中区{distribution_info.get('red_medium', 0)}个 | 大区{distribution_info.get('red_large', 0)}个
+蓝球分布: 小号{distribution_info.get('blue_small', 0)}个 | 大号{distribution_info.get('blue_large', 0)}个"""
+
+        # 构建回测信息内容
+        backtest_summary = ""
+        if backtest_info:
+            backtest_summary = f"""
+📉 策略回测表现：
+回测周期: 最近{backtest_info.get('test_periods', 'N/A')}期
+投资回报率: {backtest_info.get('roi', 'N/A')}%"""
+
+        # 构建完整推送内容
         content = f"""🎯 大乐透第{period}期AI智能预测
 
 📊 单式推荐 (共{len(recommendations)}注)：
 {rec_summary.strip()}
 {complex_summary}
-📈 分析要点：
-• 基于机器学习LightGBM算法
-• 结合历史频率和遗漏分析  
-• 运用关联规则挖掘技术
-• 多因子加权评分优选
-• 反向策略：移除高分注补充候选
+{hot_cold_summary}
+{distribution_summary}
+{backtest_summary}
 
 ⏰ 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}
 
@@ -148,7 +175,7 @@ def send_verification_report(verification_data: Dict) -> Dict:
         total_prize = verification_data.get('total_prize', 0)
         prize_summary = verification_data.get('prize_summary', '未中奖')
         
-        # 构建验证报告内容
+        # 构建完整验证报告内容
         content = f"""✅ 大乐透第{period}期开奖验证
 
 🎱 开奖号码：
