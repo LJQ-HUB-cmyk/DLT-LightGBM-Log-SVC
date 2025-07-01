@@ -108,7 +108,7 @@ def send_analysis_report(report_content: str, period: int, recommendations: List
 蓝球({len(complex_blue)}个): {' '.join(complex_blue)}
 
 💡 复式共可组成 {total_combinations:,} 注
-💰 投注成本: {total_combinations * 3:,} 元(单注3元)"""
+💰 投注成本: {total_combinations * 2:,} 元(单注2元)"""
         
         # 构建热冷号码分析内容
         hot_cold_summary = ""
@@ -160,7 +160,7 @@ def send_verification_report(verification_data: Dict) -> Dict:
     """发送大乐透验证报告
     
     Args:
-        verification_data: 验证报告数据字典，包含中奖信息
+        verification_data: 验证报告数据字典，包含中奖信息和详细统计
     
     Returns:
         推送结果字典
@@ -172,10 +172,16 @@ def send_verification_report(verification_data: Dict) -> Dict:
         winning_red = verification_data.get('winning_red', [])
         winning_blue = verification_data.get('winning_blue', [])
         total_bets = verification_data.get('total_bets', 0)
+        single_bets = verification_data.get('single_bets', 0)
+        complex_bets = verification_data.get('complex_bets', 0)
+        complex_info = verification_data.get('complex_info')
         total_prize = verification_data.get('total_prize', 0)
         prize_summary = verification_data.get('prize_summary', '未中奖')
         
-        # 构建完整验证报告内容
+        # 获取详细统计信息
+        detailed_stats = verification_data.get('detailed_stats', {})
+        
+        # 基础验证信息
         content = f"""✅ 大乐透第{period}期开奖验证
 
 🎱 开奖号码：
@@ -183,14 +189,73 @@ def send_verification_report(verification_data: Dict) -> Dict:
 蓝球：{' '.join(f'{n:02d}' for n in winning_blue)}
 
 📊 验证结果：
-投注总数：{total_bets}注
+投注总数：{total_bets}注"""
+        
+        # 显示投注构成
+        if complex_bets > 0:
+            content += f"（单式{single_bets}注 + 复式{complex_bets}注）"
+            if complex_info:
+                content += f"""
+复式详情：红球{len(complex_info['red_numbers'])}个，蓝球{len(complex_info['blue_numbers'])}个"""
+        
+        content += f"""
 中奖统计：{prize_summary}
 总奖金：{total_prize:,}元
 
-💰 投资回报：
-成本：{total_bets * 3:,}元（单注3元）
-收益：{total_prize - total_bets * 3:,}元
-回报率：{((total_prize - total_bets * 3) / (total_bets * 3) * 100):.2f}%
+💰 投资回报："""
+        
+        # 使用详细统计信息显示投资回报
+        if detailed_stats:
+            total_stats = detailed_stats.get('total', {})
+            single_stats = detailed_stats.get('single', {})
+            complex_stats = detailed_stats.get('complex', {})
+            
+            # 总体投资回报
+            total_cost = total_stats.get('cost_amount', total_bets * 2)
+            total_roi = total_stats.get('roi_percent', 0)
+            total_profit = total_stats.get('net_profit', total_prize - total_cost)
+            
+            content += f"""
+总成本：{total_cost:,}元（单注2元）
+总收益：{total_profit:+,}元
+总回报率：{total_roi:+.2f}%"""
+            
+            # 分别显示单式和复式投资回报
+            if single_stats.get('tickets_count', 0) > 0:
+                single_cost = single_stats.get('cost_amount', 0)
+                single_prize = single_stats.get('prize_amount', 0)
+                single_roi = single_stats.get('roi_percent', 0)
+                
+                content += f"""
+
+📈 单式投资：
+成本：{single_cost:,}元（{single_bets}注）
+奖金：{single_prize:,}元
+回报率：{single_roi:+.2f}%"""
+            
+            if complex_stats.get('tickets_count', 0) > 0:
+                complex_cost = complex_stats.get('cost_amount', 0)
+                complex_prize = complex_stats.get('prize_amount', 0)
+                complex_roi = complex_stats.get('roi_percent', 0)
+                
+                content += f"""
+
+📊 复式投资：
+成本：{complex_cost:,}元（{complex_bets}注）
+奖金：{complex_prize:,}元
+回报率：{complex_roi:+.2f}%"""
+        else:
+            # 向后兼容：如果没有详细统计，使用旧的计算方式
+            total_cost = total_bets * 2  # 修正为每注2元
+            total_profit = total_prize - total_cost
+            total_roi = (total_profit / total_cost * 100) if total_cost > 0 else 0
+            
+            content += f"""
+成本：{total_cost:,}元（单注2元）
+收益：{total_profit:+,}元
+回报率：{total_roi:+.2f}%"""
+        
+        content += f"""
 
 ⏰ 验证时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}"""
         

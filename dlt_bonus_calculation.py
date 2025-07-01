@@ -55,6 +55,9 @@ PRIZE_TABLE = {
     9: 5,           # 九等奖 (5元，固定)
 }
 
+# 大乐透每注价格
+TICKET_PRICE = 2  # 每注2元
+
 # ==============================================================================
 # --- 工具函数 ---
 # ==============================================================================
@@ -114,6 +117,11 @@ def get_period_data_from_csv(csv_content: str) -> Tuple[Optional[Dict], Optional
             if len(row) >= 4 and re.match(r'^\d{4,7}$', row[0]):
                 try:
                     period, date, red_str, blue_str = row[0], row[1], row[2], row[3]
+                    
+                    # 跳过没有日期的记录（通常是重复数据）
+                    if not date or date.strip() == "":
+                        continue
+                    
                     # 大乐透：5个红球，2个蓝球
                     red_balls = sorted(map(int, red_str.split(',')))
                     blue_balls = sorted(map(int, blue_str.split(',')))
@@ -122,9 +130,16 @@ def get_period_data_from_csv(csv_content: str) -> Tuple[Optional[Dict], Optional
                         not all(1 <= r <= 35 for r in red_balls) or 
                         not all(1 <= b <= 12 for b in blue_balls)):
                         continue
-                        
-                    period_map[period] = {'date': date, 'red': red_balls, 'blue': blue_balls}
-                    periods_list.append(period)
+                    
+                    # 标准化期号格式（使用简化格式存储）
+                    normalized_period = normalize_period(period)
+                    
+                    # 避免重复：如果已存在该期号，保留有更多信息的记录
+                    if normalized_period not in period_map or date:
+                        period_map[normalized_period] = {'date': date, 'red': red_balls, 'blue': blue_balls}
+                        if normalized_period not in periods_list:
+                            periods_list.append(normalized_period)
+                            
                 except (ValueError, IndexError):
                     log_message(f"CSV文件第 {i+2} 行数据格式无效，已跳过: {row}", "WARNING")
     except Exception as e:
@@ -135,7 +150,31 @@ def get_period_data_from_csv(csv_content: str) -> Tuple[Optional[Dict], Optional
         log_message("未能从CSV中解析到任何有效的开奖数据。", "WARNING")
         return None, None
         
-    return period_map, sorted(periods_list, key=int)
+    # 按期号排序（简化格式的数字排序）
+    periods_list = sorted(list(set(periods_list)), key=lambda x: int(x))
+    log_message(f"成功解析 {len(period_map)} 期有效数据，最新期号: {periods_list[-1] if periods_list else 'N/A'}")
+    
+    return period_map, periods_list
+
+def normalize_period(period: str) -> str:
+    """
+    标准化期号格式：将完整格式(2025073)转换为简化格式(25073)
+    
+    Args:
+        period (str): 原始期号
+        
+    Returns:
+        str: 标准化后的期号（简化格式）
+    """
+    if len(period) == 7 and period.startswith('2025'):
+        # 完整格式转简化格式：2025073 -> 25073
+        return period[2:]
+    elif len(period) == 5 and period.startswith('25'):
+        # 已经是简化格式
+        return period
+    else:
+        # 其他格式保持不变
+        return period
 
 def find_matching_report(target_prediction_period: str) -> Optional[str]:
     """
@@ -147,7 +186,10 @@ def find_matching_report(target_prediction_period: str) -> Optional[str]:
     Returns:
         Optional[str]: 找到的报告文件的路径，如果未找到则返回 None。
     """
-    log_message(f"正在查找预测期号为 {target_prediction_period} 的分析报告...")
+    # 标准化目标期号格式
+    normalized_target = normalize_period(target_prediction_period)
+    log_message(f"正在查找预测期号为 {target_prediction_period}(标准化后: {normalized_target}) 的分析报告...")
+    
     candidates = []
     # 使用 SCRIPT_DIR 确保在任何工作目录下都能找到与脚本同级的报告文件
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -155,9 +197,28 @@ def find_matching_report(target_prediction_period: str) -> Optional[str]:
         content = robust_file_read(file_path)
         if not content: continue
         
-        # 修改匹配逻辑：查找"本次预测目标: 第 XXX 期"
-        match = re.search(r'本次预测目标:\s*第\s*(\d+)\s*期', content)
-        if match and match.group(1) == target_prediction_period:
+        # 修改匹配逻辑：查找"本次预测目标: 第 XXX 期"和"第 XXX 期 号 码 推 荐"
+        target_match = re.search(r'本次预测目标:\s*第\s*(\d+)\s*期', content)
+        recommend_match = re.search(r'第\s*(\d+)\s*期\s*号\s*码\s*推\s*荐', content)
+        
+        found_match = False
+        period_source = ""
+        
+        # 优先检查推荐标题中的期号
+        if recommend_match:
+            report_period = normalize_period(recommend_match.group(1))
+            if report_period == normalized_target:
+                found_match = True
+                period_source = f"推荐标题期号: {recommend_match.group(1)} -> {report_period}"
+        
+        # 如果推荐标题没匹配，再检查预测目标
+        if not found_match and target_match:
+            report_period = normalize_period(target_match.group(1))
+            if report_period == normalized_target:
+                found_match = True
+                period_source = f"预测目标期号: {target_match.group(1)} -> {report_period}"
+        
+        if found_match:
             try:
                 # 从文件名中提取时间戳以确定最新报告
                 timestamp_str_match = re.search(r'_(\d{8}_\d{6})\.txt$', file_path)
@@ -165,11 +226,12 @@ def find_matching_report(target_prediction_period: str) -> Optional[str]:
                     timestamp_str = timestamp_str_match.group(1)
                     timestamp = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
                     candidates.append((timestamp, file_path))
+                    log_message(f"找到匹配报告: {os.path.basename(file_path)} ({period_source})")
             except (AttributeError, ValueError):
                 continue
     
     if not candidates:
-        log_message(f"未找到预测期号为 {target_prediction_period} 的分析报告。", "WARNING")
+        log_message(f"未找到预测期号为 {normalized_target} 的分析报告。", "WARNING")
         return None
         
     candidates.sort(reverse=True)
@@ -202,21 +264,61 @@ def parse_recommendations_from_report(content: str) -> Tuple[List, List, List]:
         except ValueError: 
             continue
     
-    # 解析复式推荐
+    # 解析复式推荐 - 支持多种格式
     complex_reds, complex_blues = [], []
+    
+    # 格式1: "红球 (Top X): ..."
     red_match = re.search(r'红球\s*\(Top\s*\d+\):\s*([\d\s]+)', content)
     if red_match:
         try: 
             complex_reds = sorted(map(int, red_match.group(1).split()))
         except ValueError: 
             pass
-        
+    
+    # 格式2: "红球 (平衡选择): ..."
+    if not complex_reds:
+        red_match = re.search(r'红球\s*\(平衡选择\):\s*([\d\s]+)', content)
+        if red_match:
+            try: 
+                complex_reds = sorted(map(int, red_match.group(1).split()))
+            except ValueError: 
+                pass
+    
+    # 格式3: "红球推荐: ..." 或其他可能的格式
+    if not complex_reds:
+        red_match = re.search(r'红球[推荐选择]*\s*[:：]\s*((?:\d{2}\s*)+)', content)
+        if red_match:
+            try: 
+                complex_reds = sorted(map(int, red_match.group(1).split()))
+            except ValueError: 
+                pass
+    
+    # 蓝球复式解析 - 支持多种格式
+    # 格式1: "蓝球 (Top X): ..."
     blue_match = re.search(r'蓝球\s*\(Top\s*\d+\):\s*([\d\s]+)', content)
     if blue_match:
         try: 
             complex_blues = sorted(map(int, blue_match.group(1).split()))
         except ValueError: 
             pass
+    
+    # 格式2: "蓝球 (平衡选择): ..."
+    if not complex_blues:
+        blue_match = re.search(r'蓝球\s*\(平衡选择\):\s*([\d\s]+)', content)
+        if blue_match:
+            try: 
+                complex_blues = sorted(map(int, blue_match.group(1).split()))
+            except ValueError: 
+                pass
+    
+    # 格式3: "蓝球推荐: ..." 或其他可能的格式
+    if not complex_blues:
+        blue_match = re.search(r'蓝球[推荐选择]*\s*[:：]\s*((?:\d{2}\s*)+)', content)
+        if blue_match:
+            try: 
+                complex_blues = sorted(map(int, blue_match.group(1).split()))
+            except ValueError: 
+                pass
     
     return rec_tickets, complex_reds, complex_blues
 
@@ -261,6 +363,85 @@ def generate_complex_tickets(reds: List, blues: List) -> List:
             complex_tickets.append((sorted(red_combo), sorted(blue_combo)))
     
     return complex_tickets
+
+def calculate_prize_detailed(single_tickets: List, complex_tickets: List, complex_info: Optional[Dict], 
+                           prize_red: List, prize_blue: List) -> Tuple[int, Dict, List, Dict]:
+    """
+    分别计算单式和复式投注的中奖情况和总奖金。
+
+    Args:
+        single_tickets (List): 单式投注号码列表
+        complex_tickets (List): 复式展开的投注号码列表
+        complex_info (Optional[Dict]): 复式投注信息
+        prize_red (List): 开奖红球号码列表
+        prize_blue (List): 开奖蓝球号码列表
+
+    Returns:
+        Tuple[int, Dict, List, Dict]:
+            - 总奖金数额
+            - 各奖级的中奖次数字典
+            - 中奖投注的详细信息列表
+            - 详细统计信息字典
+    """
+    # 计算单式投注的中奖情况
+    single_prize, single_counts, single_details = calculate_prize(single_tickets, prize_red, prize_blue)
+    
+    # 计算复式投注的中奖情况
+    complex_prize, complex_counts, complex_details = calculate_prize(complex_tickets, prize_red, prize_blue)
+    
+    # 合并统计信息
+    total_prize = single_prize + complex_prize
+    total_counts = {}
+    
+    # 合并中奖次数统计
+    for level in set(list(single_counts.keys()) + list(complex_counts.keys())):
+        total_counts[level] = single_counts.get(level, 0) + complex_counts.get(level, 0)
+    
+    # 合并中奖详情
+    all_details = single_details + complex_details
+    
+    # 计算投资成本和回报率
+    single_cost = len(single_tickets) * TICKET_PRICE
+    complex_cost = len(complex_tickets) * TICKET_PRICE
+    total_cost = single_cost + complex_cost
+    
+    # 计算投资回报率 (ROI)
+    single_roi = ((single_prize - single_cost) / single_cost * 100) if single_cost > 0 else 0
+    complex_roi = ((complex_prize - complex_cost) / complex_cost * 100) if complex_cost > 0 else 0
+    total_roi = ((total_prize - total_cost) / total_cost * 100) if total_cost > 0 else 0
+    
+    # 生成详细统计信息
+    detailed_stats = {
+        'single': {
+            'tickets_count': len(single_tickets),
+            'cost_amount': single_cost,
+            'prize_amount': single_prize,
+            'net_profit': single_prize - single_cost,
+            'roi_percent': single_roi,
+            'prize_counts': single_counts,
+            'winning_details': single_details
+        },
+        'complex': {
+            'tickets_count': len(complex_tickets),
+            'cost_amount': complex_cost,
+            'prize_amount': complex_prize,
+            'net_profit': complex_prize - complex_cost,
+            'roi_percent': complex_roi,
+            'prize_counts': complex_counts,
+            'winning_details': complex_details,
+            'info': complex_info
+        },
+        'total': {
+            'tickets_count': len(single_tickets) + len(complex_tickets),
+            'cost_amount': total_cost,
+            'prize_amount': total_prize,
+            'net_profit': total_prize - total_cost,
+            'roi_percent': total_roi,
+            'prize_counts': total_counts
+        }
+    }
+    
+    return total_prize, total_counts, all_details, detailed_stats
 
 def calculate_prize(tickets: List, prize_red: List, prize_blue: List) -> Tuple[int, Dict, List]:
     """
@@ -326,8 +507,87 @@ def calculate_prize(tickets: List, prize_red: List, prize_blue: List) -> Tuple[i
         
     return total_prize, prize_counts, winning_details
 
+def format_detailed_winning_report(detailed_stats: Dict, prize_red: List, prize_blue: List) -> List[str]:
+    """格式化详细中奖信息为报告字符串"""
+    lines = [f"=== 详细中奖统计 (开奖号码: 红球{prize_red} 蓝球{prize_blue}) ==="]
+    
+    # 总体统计
+    total_stats = detailed_stats['total']
+    lines.append(f"总投注: {total_stats['tickets_count']}注, 总成本: {total_stats['cost_amount']:,}元")
+    lines.append(f"总奖金: {total_stats['prize_amount']:,}元, 净利润: {total_stats['net_profit']:+,}元")
+    lines.append(f"总回报率: {total_stats['roi_percent']:+.2f}%")
+    
+    if total_stats['prize_amount'] == 0:
+        lines.append("本期推荐未中奖。")
+        return lines
+    
+    # 单式投注统计
+    single_stats = detailed_stats['single']
+    if single_stats['tickets_count'] > 0:
+        lines.append("")
+        lines.append("--- 单式投注统计 ---")
+        lines.append(f"投注数量: {single_stats['tickets_count']}注")
+        lines.append(f"投注成本: {single_stats['cost_amount']:,}元 ({single_stats['tickets_count']}注 × {TICKET_PRICE}元)")
+        lines.append(f"中奖金额: {single_stats['prize_amount']:,}元")
+        lines.append(f"净利润: {single_stats['net_profit']:+,}元")
+        lines.append(f"投资回报率: {single_stats['roi_percent']:+.2f}%")
+        
+        if single_stats['prize_counts']:
+            prize_summary = ", ".join([f"{k}:{v}次" for k, v in single_stats['prize_counts'].items()])
+            lines.append(f"中奖分布: {prize_summary}")
+            
+            # 显示单式中奖详情（限制显示数量）
+            if single_stats['winning_details']:
+                lines.append("中奖详情:")
+                for i, win in enumerate(single_stats['winning_details'][:10]):  # 最多显示10条
+                    red_nums, blue_nums = win['ticket']
+                    lines.append(f"  单式第{i+1}注: 红球{red_nums} 蓝球{blue_nums} | "
+                                f"命中{win['red_hits']}+{win['blue_hits']} | "
+                                f"{win['prize_level']} | {win['prize_amount']:,}元")
+                if len(single_stats['winning_details']) > 10:
+                    lines.append(f"  ... 还有{len(single_stats['winning_details'])-10}注中奖")
+        else:
+            lines.append("中奖分布: 未中奖")
+    
+    # 复式投注统计
+    complex_stats = detailed_stats['complex']
+    if complex_stats['tickets_count'] > 0:
+        lines.append("")
+        lines.append("--- 复式投注统计 ---")
+        complex_info = complex_stats['info']
+        if complex_info:
+            lines.append(f"复式选号: 红球{len(complex_info['red_numbers'])}个{complex_info['red_numbers']}, "
+                        f"蓝球{len(complex_info['blue_numbers'])}个{complex_info['blue_numbers']}")
+            lines.append(f"展开注数: {complex_info['total_combinations']}注")
+        else:
+            lines.append(f"投注数量: {complex_stats['tickets_count']}注")
+        
+        lines.append(f"投注成本: {complex_stats['cost_amount']:,}元 ({complex_stats['tickets_count']}注 × {TICKET_PRICE}元)")
+        lines.append(f"中奖金额: {complex_stats['prize_amount']:,}元")
+        lines.append(f"净利润: {complex_stats['net_profit']:+,}元")
+        lines.append(f"投资回报率: {complex_stats['roi_percent']:+.2f}%")
+        
+        if complex_stats['prize_counts']:
+            prize_summary = ", ".join([f"{k}:{v}次" for k, v in complex_stats['prize_counts'].items()])
+            lines.append(f"中奖分布: {prize_summary}")
+            
+            # 显示复式中奖详情（限制显示数量）
+            if complex_stats['winning_details']:
+                lines.append("中奖详情:")
+                for i, win in enumerate(complex_stats['winning_details'][:10]):  # 最多显示10条
+                    red_nums, blue_nums = win['ticket']
+                    lines.append(f"  复式第{i+1}注: 红球{red_nums} 蓝球{blue_nums} | "
+                                f"命中{win['red_hits']}+{win['blue_hits']} | "
+                                f"{win['prize_level']} | {win['prize_amount']:,}元")
+                if len(complex_stats['winning_details']) > 10:
+                    lines.append(f"  ... 还有{len(complex_stats['winning_details'])-10}注中奖")
+        else:
+            lines.append("中奖分布: 未中奖")
+    
+    return lines
+
 def format_winning_tickets_for_report(winning_list: List[Dict], prize_red: List, prize_blue: List) -> List[str]:
-    """格式化中奖信息为报告字符串"""
+    """格式化中奖信息为报告字符串（保持向后兼容）"""
     if not winning_list:
         return ["本期推荐未中奖。"]
     
@@ -365,11 +625,63 @@ def manage_report(new_entry: Optional[Dict] = None, new_error: Optional[str] = N
             f"评估时间: {new_entry['timestamp']}",
             f"评估期号: {new_entry['period']}",
             f"开奖号码: 红球{new_entry['winning_red']} 蓝球{new_entry['winning_blue']}",
-            f"总投注: {new_entry['total_bets']}注",
-            f"总奖金: {new_entry['total_prize']:,}元",
-            f"中奖统计: {new_entry['prize_summary']}",
-            ""
         ]
+        
+        # 显示投注详情
+        single_bets = new_entry.get('single_bets', 0)
+        complex_bets = new_entry.get('complex_bets', 0)
+        total_bets = new_entry.get('total_bets', single_bets + complex_bets)
+        
+        if complex_bets > 0:
+            entry_lines.append(f"投注统计: 单式{single_bets}注, 复式{complex_bets}注, 合计{total_bets}注")
+            
+            # 显示复式信息
+            complex_info = new_entry.get('complex_info')
+            if complex_info:
+                entry_lines.append(f"复式详情: 红球{len(complex_info['red_numbers'])}个, 蓝球{len(complex_info['blue_numbers'])}个")
+        else:
+            entry_lines.append(f"总投注: {total_bets}注")
+        
+        # 显示投资回报率信息
+        detailed_stats = new_entry.get('detailed_stats')
+        if detailed_stats:
+            total_stats = detailed_stats['total']
+            entry_lines.extend([
+                f"总成本: {total_stats['cost_amount']:,}元",
+                f"总奖金: {new_entry['total_prize']:,}元",
+                f"净利润: {total_stats['net_profit']:+,}元",
+                f"总回报率: {total_stats['roi_percent']:+.2f}%",
+                f"中奖统计: {new_entry['prize_summary']}",
+                ""
+            ])
+            
+            # 分别显示单式和复式的投资回报
+            single_stats = detailed_stats['single']
+            complex_stats = detailed_stats['complex']
+            
+            if single_stats['tickets_count'] > 0:
+                entry_lines.extend([
+                    "--- 单式投资回报 ---",
+                    f"单式成本: {single_stats['cost_amount']:,}元, 奖金: {single_stats['prize_amount']:,}元",
+                    f"单式回报率: {single_stats['roi_percent']:+.2f}%"
+                ])
+            
+            if complex_stats['tickets_count'] > 0:
+                entry_lines.extend([
+                    "--- 复式投资回报 ---",
+                    f"复式成本: {complex_stats['cost_amount']:,}元, 奖金: {complex_stats['prize_amount']:,}元", 
+                    f"复式回报率: {complex_stats['roi_percent']:+.2f}%"
+                ])
+            
+            entry_lines.append("")
+        else:
+            # 向后兼容，如果没有detailed_stats
+            entry_lines.extend([
+                f"总奖金: {new_entry['total_prize']:,}元",
+                f"中奖统计: {new_entry['prize_summary']}",
+                ""
+            ])
+        
         if new_entry.get('winning_details'):
             entry_lines.extend(new_entry['winning_details'])
         
@@ -442,15 +754,24 @@ def main_process():
         
         # 生成复式投注
         complex_tickets = []
+        complex_info = None
         if complex_reds and complex_blues:
             complex_tickets = generate_complex_tickets(complex_reds, complex_blues)
+            if complex_tickets:
+                complex_info = {
+                    'red_numbers': complex_reds,
+                    'blue_numbers': complex_blues,
+                    'total_combinations': len(complex_tickets)
+                }
+                log_message(f"复式号码解析成功: 红球{len(complex_reds)}个{complex_reds}, 蓝球{len(complex_blues)}个{complex_blues}")
+                log_message(f"复式展开为{len(complex_tickets)}注单式投注")
         
         # 合并所有投注
         all_tickets = rec_tickets + complex_tickets
         if not all_tickets:
             raise Exception("未能解析到任何推荐号码")
         
-        log_message(f"解析到投注: 单式{len(rec_tickets)}注, 复式{len(complex_tickets)}注")
+        log_message(f"总投注统计: 单式{len(rec_tickets)}注, 复式{len(complex_tickets)}注, 合计{len(all_tickets)}注")
         
         # 获取开奖结果
         prize_data = period_map[latest_period]
@@ -459,12 +780,13 @@ def main_process():
         
         log_message(f"开奖结果: 红球{prize_red} 蓝球{prize_blue}")
         
-        # 计算中奖情况
-        total_prize, prize_counts, winning_details = calculate_prize(all_tickets, prize_red, prize_blue)
+        # 使用详细计算函数分别计算单式和复式的中奖情况
+        total_prize, prize_counts, winning_details, detailed_stats = calculate_prize_detailed(
+            rec_tickets, complex_tickets, complex_info, prize_red, prize_blue)
         
         # 格式化结果
         prize_summary = ", ".join([f"{k}:{v}次" for k, v in prize_counts.items()]) if prize_counts else "未中奖"
-        winning_lines = format_winning_tickets_for_report(winning_details, prize_red, prize_blue)
+        winning_lines = format_detailed_winning_report(detailed_stats, prize_red, prize_blue)
         
         # 生成报告记录
         report_entry = {
@@ -473,16 +795,45 @@ def main_process():
             'winning_red': prize_red,
             'winning_blue': prize_blue,
             'total_bets': len(all_tickets),
+            'single_bets': len(rec_tickets),
+            'complex_bets': len(complex_tickets),
+            'complex_info': complex_info,
             'total_prize': total_prize,
             'prize_summary': prize_summary,
-            'winning_details': winning_lines
+            'winning_details': winning_lines,
+            'detailed_stats': detailed_stats
         }
         
         # 更新报告
         manage_report(new_entry=report_entry)
         
-        log_message(f"验证完成: 总投注{len(all_tickets)}注, 总奖金{total_prize:,}元")
+        # 详细的验证完成日志
+        total_stats = detailed_stats['total']
+        single_stats = detailed_stats['single']
+        complex_stats = detailed_stats['complex']
+        
+        if complex_tickets:
+            log_message(f"验证完成: 单式{len(rec_tickets)}注, 复式{len(complex_tickets)}注, 合计{len(all_tickets)}注")
+            if complex_info:
+                log_message(f"复式统计: 红球{len(complex_info['red_numbers'])}个, 蓝球{len(complex_info['blue_numbers'])}个, 展开{complex_info['total_combinations']}注")
+        else:
+            log_message(f"验证完成: 总投注{len(all_tickets)}注")
+        
+        log_message(f"总成本: {total_stats['cost_amount']:,}元, 总奖金: {total_prize:,}元, 总回报率: {total_stats['roi_percent']:+.2f}%")
         log_message(f"中奖分布: {prize_summary}")
+        
+        # 分别显示单式和复式的投资回报情况
+        if single_stats['tickets_count'] > 0:
+            log_message(f"单式投资: 成本{single_stats['cost_amount']:,}元, 奖金{single_stats['prize_amount']:,}元, 回报率{single_stats['roi_percent']:+.2f}%")
+            if single_stats['prize_amount'] > 0:
+                single_summary = ", ".join([f"{k}:{v}次" for k, v in single_stats['prize_counts'].items()])
+                log_message(f"单式中奖: {single_summary}")
+        
+        if complex_stats['tickets_count'] > 0:
+            log_message(f"复式投资: 成本{complex_stats['cost_amount']:,}元, 奖金{complex_stats['prize_amount']:,}元, 回报率{complex_stats['roi_percent']:+.2f}%")
+            if complex_stats['prize_amount'] > 0:
+                complex_summary = ", ".join([f"{k}:{v}次" for k, v in complex_stats['prize_counts'].items()])
+                log_message(f"复式中奖: {complex_summary}")
         
         # 发送微信推送
         try:
@@ -495,8 +846,12 @@ def main_process():
                 'winning_red': prize_red,
                 'winning_blue': prize_blue,
                 'total_bets': len(all_tickets),
+                'single_bets': len(rec_tickets),
+                'complex_bets': len(complex_tickets),
+                'complex_info': complex_info,
                 'total_prize': total_prize,
-                'prize_summary': prize_summary
+                'prize_summary': prize_summary,
+                'detailed_stats': detailed_stats
             }
             
             # 发送验证报告推送
