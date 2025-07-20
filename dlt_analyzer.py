@@ -94,7 +94,7 @@ ML_INTERACTION_PAIRS = [('red_sum', 'red_odd_count')]
 # 用于生成自身平方交互特征的特征 (e.g., 红球跨度的平方)
 ML_INTERACTION_SELF = ['red_span']
 # 计算号码"近期"出现频率时所参考的期数窗口大小
-RECENT_FREQ_WINDOW = 50
+RECENT_FREQ_WINDOW = 20
 # 计算主要频率分析时所参考的期数窗口大小 (用于替代全历史数据)
 MAIN_FREQ_WINDOW = 50
 # 关联规则挖掘和模式分析的窗口大小
